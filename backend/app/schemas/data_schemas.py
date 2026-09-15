@@ -11,7 +11,9 @@ from app.models.data_models import (
 class ScheduleCreate(BaseModel):
     user_id: Optional[str] = None  # Если None — берётся текущий пользователь
     title: str = Field(min_length=1, max_length=500)
-    day_of_week: int = Field(ge=0, le=6)  # 0=Пн ... 6=Вс
+    day_of_week: Optional[int] = Field(None, ge=0, le=6)  # 0=Пн ... 6=Вс
+    event_date: Optional[str] = None   # YYYY-MM-DD: конкретный день (тогда dow не обязателен)
+    weeks: Optional[str] = None        # фильтр недель для повторяющейся записи
     start_time: str  # HH:MM
     end_time: str    # HH:MM
     group_name: str = ""
@@ -29,11 +31,14 @@ class ScheduleBatchCreate(BaseModel):
 class ScheduleUpdate(BaseModel):
     title: Optional[str] = Field(None, max_length=500)
     day_of_week: Optional[int] = Field(None, ge=0, le=6)
+    event_date: Optional[str] = None    # YYYY-MM-DD или '' (снять дату → шаблон)
+    weeks: Optional[str] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
     group_name: Optional[str] = None
     room: Optional[str] = None
     type: Optional[ScheduleType] = None
+    user_id: Optional[str] = None       # перенос на другого (только менеджер/админ)
 
 
 class ScheduleOut(BaseModel):
@@ -41,6 +46,8 @@ class ScheduleOut(BaseModel):
     user_id: str
     title: str
     day_of_week: int
+    event_date: Optional[str] = None    # None = недельный шаблон
+    weeks: Optional[str] = None
     start_time: str
     end_time: str
     group_name: str

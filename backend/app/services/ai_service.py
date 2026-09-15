@@ -583,50 +583,111 @@ async def create_ai_provider() -> AIProvider:
 
 
 async def build_system_context(user_id: str) -> str:
-    """Строит системный промпт с контекстом расписания и задач пользователя."""
+    """Системный промпт: честная картина календаря по ДАТАМ + задачи + активный импорт.
+
+    Расписание показывается развёрткой на ближайшие 14 дней (недельные шаблоны
+    с weeks-паритетом и датированные занятия слиты в календарь по датам), чтобы
+    отвечать «какие пары завтра / когда ближайший выходной» правдой, а не по
+    дням недели вслепую.
+    """
     from app.database import DataSessionLocal
     from sqlalchemy import select
-    from app.models.data_models import Schedule, Task
-    from datetime import date
+    from app.models.data_models import Schedule, Task, ScheduleImport, ImportState
+    from app.services.import_expander import monday_of, week_number, weeks_match
+    from datetime import date, timedelta
+    import json as _json
 
     today = date.today()
-    today_weekday = today.weekday()  # 0=ПН…6=ВС
     days = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+    short = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"]
 
     async with DataSessionLocal() as session:
-        # Расписание
-        r = await session.execute(select(Schedule).where(Schedule.user_id == user_id).order_by(Schedule.day_of_week, Schedule.start_time))
+        r = await session.execute(
+            select(Schedule).where(Schedule.user_id == user_id)
+            .order_by(Schedule.day_of_week, Schedule.start_time))
         schedules = r.scalars().all()
 
-        # Задачи (кроме выполненных)
         r = await session.execute(
-            select(Task)
-            .where(Task.user_id == user_id)
-            .where(Task.status != "done")
-            .order_by(Task.due_date)
-        )
+            select(Task).where(Task.user_id == user_id).where(Task.status != "done")
+            .order_by(Task.due_date))
         tasks = r.scalars().all()
 
-    ctx = "Ты — ИИ-помощник преподавателя. Отвечай на русском языке.\n\n"
-    ctx += f"## Сегодня: {today.isoformat()} ({days[today_weekday]})\n"
-    ctx += f"Текущий день недели: {days[today_weekday]} (day_of_week={today_weekday}, где 0=ПН…6=ВС)\n\n"
+        imp = (await session.execute(
+            select(ScheduleImport)
+            .where(ScheduleImport.user_id == user_id)
+            .where(ScheduleImport.state.in_([ImportState.ASK_PERIOD, ImportState.ASK_END, ImportState.READY]))
+            .order_by(ScheduleImport.created_at.desc())
+        )).scalars().first()
 
-    if schedules:
-        ctx += "## Текущее расписание преподавателя:\n"
-        for s in schedules:
-            marker = " ← СЕГОДНЯ" if s.day_of_week == today_weekday else ""
-            ctx += f"- {days[s.day_of_week]}: {s.start_time.strftime('%H:%M')}-{s.end_time.strftime('%H:%M')} | {s.title} | Группа: {s.group_name} | Ауд: {s.room} | Тип: {s.type.value}{marker}\n"
-    else:
-        ctx += "## Расписание: пока не заполнено\n"
+    templates = [s for s in schedules if s.event_date is None]
+    dated = [s for s in schedules if s.event_date is not None]
+    first_mon = monday_of(today)
+
+    ctx = "Ты — ИИ-помощник преподавателя. Отвечай на русском языке.\n\n"
+    ctx += f"## Сегодня: {today.isoformat()} ({days[today.weekday()]})\n\n"
+
+    # ── Календарь по датам на 14 дней ──
+    ctx += "## Календарь на ближайшие 14 дней (фактические даты):\n"
+    any_day = False
+    for k in range(14):
+        d = today + timedelta(days=k)
+        n = week_number(d, first_mon)
+        items = []
+        for s in dated:
+            if s.event_date == d:
+                items.append(f"{s.start_time:%H:%M}-{s.end_time:%H:%M} {s.title}"
+                             + (f" | гр. {s.group_name}" if s.group_name else "")
+                             + (f" | ауд {s.room}" if s.room else "") + " (конкретная дата)")
+        for s in templates:
+            if s.day_of_week != d.weekday():
+                continue
+            if s.weeks and not weeks_match(s.weeks, n):
+                continue
+            tag = "каждую неделю" if not s.weeks else f"недели: {s.weeks}"
+            items.append(f"{s.start_time:%H:%M}-{s.end_time:%H:%M} {s.title}"
+                         + (f" | гр. {s.group_name}" if s.group_name else "")
+                         + (f" | ауд {s.room}" if s.room else "") + f" (шаблон, {tag})")
+        label = "СЕГОДНЯ" if k == 0 else ("ЗАВТРА" if k == 1 else "")
+        head = f"### {d.isoformat()} ({days[d.weekday()]}{', неделя ' + str(n) if n else ''})" + (f" ← {label}" if label else "")
+        if items:
+            any_day = True
+            ctx += head + "\n" + "\n".join(f"- {i}" for i in sorted(items)) + "\n"
+        elif label:
+            ctx += head + "\n- занятий нет\n"
+    if not any_day and not dated and not templates:
+        ctx += "- расписание пустое\n"
+
+    # ── Дальше по датам (кроме окна 14 дней) ──
+    far = sorted({s.event_date for s in dated if s.event_date > today + timedelta(days=13)})
+    if far:
+        ctx += "\n## Датированные занятия позже 14 дней (по датам):\n"
+        for d in far[:40]:
+            cnt = sum(1 for s in dated if s.event_date == d)
+            ctx += f"- {d.isoformat()} ({short[d.weekday()]}): {cnt} зан.\n"
+
+    if imp is not None:
+        try:
+            items_cnt = len(_json.loads(imp.items_json or "[]"))
+        except Exception:
+            items_cnt = 0
+        state_txt = {
+            "ASK_PERIOD": "система ждёт ответ пользователя «на ближайшую неделю или на семестр?» — "
+                          "если пользователь ответит тебе, переспроси то же самое или напомни варианты",
+            "ASK_END": "выбран семестр, система ждёт дату окончания («до 30 декабря»)",
+            "READY": "развёрнуто по датам и ждёт карточки подтверждения",
+        }.get(imp.state.name if hasattr(imp.state, "name") else str(imp.state), "")
+        ctx += (f"\n## Активный импорт файла «{imp.filename}»: {items_cnt} распознанных занятий "
+                f"(по преподавателям — см. вопрос системы). Статус: {state_txt}.\n"
+                "Содержимое файла построчно ты НЕ видишь; массовые операции по импорту "
+                "система делает сама через карточки — create_schedule по памяти НЕ создавай.\n")
 
     if tasks:
         ctx += "\n## Активные задачи (заметки):\n"
         for t in tasks:
             scope = getattr(t, "scope", None)
             scope_val = scope.value if scope else "none"
-
             if t.due_date:
-                due = f" (на {t.due_date.isoformat()})"
+                due = f" (на {t.due_date.isoformat()}, {days[t.due_date.weekday()]})"
                 overdue = " ПРОСРОЧЕНО!" if t.due_date < today else ""
             elif getattr(t, "due_month", None):
                 due = f" (на месяц {t.due_month})"
@@ -636,12 +697,13 @@ async def build_system_context(user_id: str) -> str:
                 overdue = " ПРОСРОЧЕНО!" if t.due_year < today.year else ""
             else:
                 due, overdue = " (без срока)", ""
-
             ctx += f"- [{scope_val}] {t.status.value}: {t.title}{due}{overdue}\n"
     else:
         ctx += "\n## Активные задачи: отсутствуют\n"
 
-    ctx += "\nТы можешь помогать с расписанием, задачами, отвечать на вопросы, давать рекомендации."
+    ctx += ("\nОтвечай строго по календарю выше: «какие пары завтра» — бери блок с меткой "
+            "ЗАВТРА; «когда ближайший выходной» — первый день без занятий, считая с сегодня. "
+            "Если данных нет — так и скажи, не выдумывай.")
     ctx += "\nЕсли спрашивают «какие сегодня пары» — смотри записи помеченные «СЕГОДНЯ»."
 
     from app.services.chat_actions import TOOL_PROMPT

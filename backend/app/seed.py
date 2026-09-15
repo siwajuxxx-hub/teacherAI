@@ -26,7 +26,7 @@ async def seed():
                 username="manager",
                 password_hash=hash_password("manager"),
                 full_name="Иван Петрович",
-                position="Завуч",
+                position="Административная учетная запись",
                 role=UserRole.MANAGER,
             )
             session.add(manager)

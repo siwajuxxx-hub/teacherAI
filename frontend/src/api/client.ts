@@ -2,7 +2,7 @@ import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios'
 import type {
   User, ScheduleItem, ScheduleCreatePayload, TaskItem, TaskCreatePayload,
   UserCreatePayload, UserUpdatePayload, AISettings, AISettingsUpdatePayload,
-  ChatMessage, ParsedScheduleResponse, ChatAction, ExecuteActionsResponse,
+  ChatMessage, UploadEnvelope, ChatHistoryEnvelope, ConfirmResult,
 } from '../types'
 
 const api = axios.create({
@@ -295,24 +295,67 @@ export async function getManagerCalendar(year: number, month: number, teacherId?
 
 // ── Chat API ──────────────────────────────────────────
 
-export function sendChatMessage(message: string): Promise<Response> {
-  return fetch('/api/chat/send', {
+/** fetch с JWT и одноразовой ротокеновой перезаписью при 401. */
+async function authFetch(input: string, init: RequestInit = {}): Promise<Response> {
+  const doFetch = () => {
+    const headers = new Headers(init.headers || {})
+    const token = localStorage.getItem('access_token')
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    return fetch(input, { ...init, headers })
+  }
+  let res = await doFetch()
+  if (res.status === 401) {
+    const refreshed = await tryRefreshToken()
+    if (refreshed) res = await doFetch()
+  }
+  return res
+}
+
+let _refreshPromise: Promise<boolean> | null = null
+async function tryRefreshToken(): Promise<boolean> {
+  if (_refreshPromise) return _refreshPromise
+  const refreshToken = localStorage.getItem('refresh_token')
+  if (!refreshToken) return false
+  _refreshPromise = (async () => {
+    try {
+      const { data } = await axios.post('/api/auth/refresh', { refresh_token: refreshToken })
+      localStorage.setItem('access_token', data.access_token)
+      localStorage.setItem('refresh_token', data.refresh_token)
+      return true
+    } catch {
+      localStorage.removeItem('access_token')
+      localStorage.removeItem('refresh_token')
+      window.dispatchEvent(new CustomEvent('auth-expired'))
+      return false
+    } finally {
+      _refreshPromise = null
+    }
+  })()
+  return _refreshPromise
+}
+
+/** Отправка текстового сообщения в чат (SSE-поток). */
+export function sendChatMessage(message: string, signal?: AbortSignal): Promise<Response> {
+  return authFetch('/api/chat/send', {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${localStorage.getItem('access_token')}`,
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message }),
+    signal,
   })
 }
 
-/** Выполняет подтверждённые действия из чата. */
-export async function executeChatActions(actions: ChatAction[]): Promise<ExecuteActionsResponse> {
-  const { data } = await api.post('/chat/execute-actions', { actions })
-  return data as ExecuteActionsResponse
+/** Подтверждение карточки-предложения (selected — индексы строк, если выборочное). */
+export async function confirmProposal(proposal_id: string, selected?: number[]): Promise<ConfirmResult> {
+  const { data } = await api.post('/chat/confirm', { proposal_id, selected: selected ?? null })
+  return data as ConfirmResult
 }
 
-export async function uploadFile(file: File, message?: string): Promise<ParsedScheduleResponse> {
+/** Отклонение карточки-предложения. */
+export async function rejectProposal(proposal_id: string): Promise<void> {
+  await api.post('/chat/reject', { proposal_id })
+}
+
+export async function uploadFile(file: File, message?: string): Promise<UploadEnvelope> {
   const formData = new FormData()
   formData.append('file', file)
   // ВАЖНО: текст запроса нужен бэкенду, чтобы понять режим импорта
@@ -321,11 +364,8 @@ export async function uploadFile(file: File, message?: string): Promise<ParsedSc
     formData.append('message', message.trim())
   }
 
-  const response = await fetch('/api/chat/upload', {
+  const response = await authFetch('/api/chat/upload', {
     method: 'POST',
-    headers: {
-      Authorization: `Bearer ${localStorage.getItem('access_token')}`,
-    },
     body: formData,
   })
 
@@ -338,12 +378,12 @@ export async function uploadFile(file: File, message?: string): Promise<ParsedSc
     throw new Error(detail)
   }
 
-  return response.json()
+  return response.json() as Promise<UploadEnvelope>
 }
 
-export async function getChatHistory(limit = 50) {
+export async function getChatHistory(limit = 50): Promise<ChatHistoryEnvelope> {
   const { data } = await api.get('/chat/history', { params: { limit } })
-  return data as ChatMessage[]
+  return data as ChatHistoryEnvelope
 }
 
 // ── Settings API (admin) ──────────────────────────────

@@ -372,7 +372,7 @@ const UsersManagement: React.FC = () => {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Роль</label>
             <select value={createForm.role} onChange={(e) => setCreateForm({ ...createForm, role: e.target.value as 'teacher' | 'manager' | 'admin' })} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-              <option value="admin">Администратор</option><option value="manager">Завуч</option><option value="teacher">Учитель</option>
+              <option value="admin">Администратор</option><option value="manager">Административная учетная запись</option><option value="teacher">Учитель</option>
             </select>
           </div>
           <button type="submit" disabled={saving} className="w-full flex items-center justify-center gap-2 py-2.5 bg-indigo-600 text-white font-medium rounded-xl hover:bg-indigo-700 transition-colors disabled:opacity-50">
@@ -391,7 +391,7 @@ const UsersManagement: React.FC = () => {
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Роль</label>
             <select value={editForm.role} onChange={(e) => setEditForm({ ...editForm, role: e.target.value })} className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500">
-              <option value="admin">Администратор</option><option value="manager">Завуч</option><option value="teacher">Учитель</option>
+              <option value="admin">Администратор</option><option value="manager">Административная учетная запись</option><option value="teacher">Учитель</option>
             </select>
           </div>
           <div className="flex items-center gap-3">

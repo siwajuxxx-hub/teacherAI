@@ -57,6 +57,71 @@ async def init_databases():
         await conn.run_sync(DataBase.metadata.create_all)
 
     await _migrate_tasks()
+    await _migrate_schedules()
+    await _migrate_imports()
+
+
+async def _migrate_schedules():
+    """Добавляет schedules.event_date и schedules.weeks (шаг «даты занятий»)."""
+    from sqlalchemy import text
+
+    async with data_engine.begin() as conn:
+        result = await conn.execute(text("PRAGMA table_info(schedules)"))
+        rows = result.fetchall()
+        columns = {row[1] for row in rows}
+        if not columns:
+            return  # таблицы ещё нет — create_all её создаст
+
+        additions = {
+            "event_date": "ALTER TABLE schedules ADD COLUMN event_date DATE",
+            "weeks": "ALTER TABLE schedules ADD COLUMN weeks VARCHAR(100)",
+        }
+        for name, ddl in additions.items():
+            if name not in columns:
+                await conn.execute(text(ddl))
+                columns.add(name)
+        try:
+            await conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_schedules_event_date ON schedules (event_date)"
+            ))
+        except Exception:
+            pass
+
+
+async def _migrate_imports():
+    """Достраивает schedule_imports и разово переносит last_imports → schedule_imports."""
+    from sqlalchemy import text
+
+    async with data_engine.begin() as conn:
+        try:
+            cols = {r[1] for r in (await conn.execute(text(
+                "PRAGMA table_info(schedule_imports)"))).fetchall()}
+            if cols and "pending_json" not in cols:
+                await conn.execute(text(
+                    "ALTER TABLE schedule_imports ADD COLUMN pending_json TEXT NOT NULL DEFAULT '{}'"))
+            if cols and "source_items_json" not in cols:
+                await conn.execute(text(
+                    "ALTER TABLE schedule_imports ADD COLUMN source_items_json TEXT NOT NULL DEFAULT '[]'"))
+            has_old = (await conn.execute(text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='last_imports'"
+            ))).fetchall()
+            if not has_old:
+                return
+            n_new = (await conn.execute(text("SELECT COUNT(*) FROM schedule_imports"))).scalar()
+            if n_new:
+                return
+            rows = (await conn.execute(text(
+                "SELECT user_id, filename, items_json, imported_at FROM last_imports"
+            ))).fetchall()
+            import uuid as _uuid
+            for r in rows:
+                await conn.execute(text(
+                    "INSERT INTO schedule_imports (id, user_id, filename, kind, state, items_json, "
+                    "source_items_json, pending_json, created_at, updated_at) "
+                    "VALUES (:i,:u,:f,'WEEKLY','READY',:j,:j,'{}',:t,:t)"
+                ), {"i": str(_uuid.uuid4()), "u": r[0], "f": r[1], "j": r[2], "t": r[3]})
+        except Exception:
+            pass  # пусть новая функциональность стартует с чистого листа
 
 
 async def _migrate_tasks():

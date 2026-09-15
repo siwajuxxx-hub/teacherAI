@@ -333,25 +333,34 @@ async def manager_calendar(
             days[iso] = {"date": iso, "lessons": [], "tasks": []}
         return days[iso]
 
-    # Пары: разворачиваем шаблон недели в даты месяца
+    # Пары: датированные — на свою дату; недельные шаблоны — разворачиваются
+    # в даты месяца (с учётом недельных фильтров weeks/'верх'/'низ')
+    from app.services.import_expander import monday_of, week_number, weeks_match
+    first_monday = monday_of(date.today())
     for s in schedule:
         tinfo = teacher_map.get(s.user_id)
         if not tinfo and not teacher_id:
             continue
+        lesson = {
+            "id": s.id,
+            "teacher_id": s.user_id,
+            "teacher_name": tinfo["full_name"] if tinfo else "—",
+            "title": s.title,
+            "start_time": s.start_time.strftime("%H:%M"),
+            "end_time": s.end_time.strftime("%H:%M"),
+            "group_name": s.group_name,
+            "room": s.room,
+            "type": s.type.value if hasattr(s.type, "value") else str(s.type),
+            "dated": bool(s.event_date),
+        }
+        if s.event_date:
+            if first <= s.event_date <= last:
+                day_entry(s.event_date.isoformat())["lessons"].append(dict(lesson))
+            continue
         d = first
         while d <= last:
-            if d.isoweekday() == s.day_of_week + 1:
-                day_entry(d.isoformat())["lessons"].append({
-                    "id": s.id,
-                    "teacher_id": s.user_id,
-                    "teacher_name": tinfo["full_name"] if tinfo else "—",
-                    "title": s.title,
-                    "start_time": s.start_time.strftime("%H:%M"),
-                    "end_time": s.end_time.strftime("%H:%M"),
-                    "group_name": s.group_name,
-                    "room": s.room,
-                    "type": s.type.value if hasattr(s.type, "value") else str(s.type),
-                })
+            if d.weekday() == s.day_of_week and (not s.weeks or weeks_match(s.weeks, week_number(d, first_monday))):
+                day_entry(d.isoformat())["lessons"].append(dict(lesson))
             d += timedelta(days=1)
 
     # Задачи: по дате; месячные — в каждый день месяца; годовые — в каждый день года

@@ -391,6 +391,7 @@ export default function NotesTab() {
                 task={task}
                 onEdit={() => openEditModal(task)}
                 onStatus={handleStatusChange}
+                onDelete={handleDelete}
               />
             ))}
           </div>
@@ -435,6 +436,7 @@ export default function NotesTab() {
                 showDue
                 onEdit={() => openEditModal(task)}
                 onStatus={handleStatusChange}
+                onDelete={handleDelete}
               />
             ))}
           </div>
@@ -577,7 +579,8 @@ const TaskCard: React.FC<{
   showDue?: boolean
   onEdit: () => void
   onStatus: (id: string, status: string) => void
-}> = ({ task, showDue, onEdit, onStatus }) => {
+  onDelete: (id: string) => void
+}> = ({ task, showDue, onEdit, onStatus, onDelete }) => {
   const overdue = isOverdue(task)
   const statusKey = overdue ? 'overdue' : task.status
   const meta = STATUS_META[statusKey] ?? STATUS_META.pending
@@ -617,35 +620,41 @@ const TaskCard: React.FC<{
         )}
       </div>
 
-      {task.status !== 'done' && (
-        <div className="flex gap-1 mt-2 pt-2 border-t border-gray-100" onClick={e => e.stopPropagation()}>
-          {task.status !== 'in_progress' && (
+      <div className="flex gap-1 mt-2 pt-2 border-t border-gray-100" onClick={e => e.stopPropagation()}>
+        {task.status !== 'done' && (
+          <div className="flex gap-1">
+            {task.status !== 'in_progress' && (
+              <button
+                onClick={() => onStatus(task.id, 'in_progress')}
+                className="text-[11px] px-2 py-1 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded transition"
+              >
+                В работу
+              </button>
+            )}
             <button
-              onClick={() => onStatus(task.id, 'in_progress')}
-              className="text-[11px] px-2 py-1 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded transition"
+              onClick={() => onStatus(task.id, 'done')}
+              className="text-[11px] px-2 py-1 bg-green-50 text-green-600 hover:bg-green-100 rounded transition"
             >
-              В работу
+              Выполнено
             </button>
-          )}
-          <button
-            onClick={() => onStatus(task.id, 'done')}
-            className="text-[11px] px-2 py-1 bg-green-50 text-green-600 hover:bg-green-100 rounded transition"
-          >
-            Выполнено
-          </button>
-        </div>
-      )}
-
-      {task.status === 'done' && (
-        <div className="flex gap-1 mt-2 pt-2 border-t border-gray-100" onClick={e => e.stopPropagation()}>
+          </div>
+        )}
+        {task.status === 'done' && (
           <button
             onClick={() => onStatus(task.id, 'pending')}
             className="text-[11px] px-2 py-1 bg-gray-50 text-gray-500 hover:bg-gray-100 rounded transition"
           >
             Вернуть в работу
           </button>
-        </div>
-      )}
+        )}
+        <button
+          onClick={() => onDelete(task.id)}
+          title="Удалить задачу"
+          className="ml-auto text-[11px] px-2 py-1 bg-red-50 text-red-500 hover:bg-red-100 rounded transition flex items-center gap-1"
+        >
+          <Trash2 size={11} />
+        </button>
+      </div>
     </div>
   )
 }

@@ -44,9 +44,10 @@ RANK = (r"(?:доц|проф|ассистент|асс|ст\.?\s?преп|ст\.
 # ФИО: ВСЕГДА со званием — «доц. Быков А.А.», «асс.Жарков А.П.», «ст.пр. Гаврилов А.И».
 # Звание обязательно: иначе подписи («составила Космачева О.») и прочие
 # фамилии без контекста занятия превращаются в преподавателей.
+# Инициалы допускаются и без точек («Новикова М А.» — встречается в docx).
 TEACHER_RE = re.compile(
     rf"(?<![а-яё])(?:{RANK})[.,]?\s*([А-ЯЁ][а-яё]{{2,}})\s+"
-    rf"(?:([А-ЯЁ])[.,]\s*([А-ЯЁ]?)[.,]?|([А-ЯЁ][а-яё]{{2,}})\s+([А-ЯЁ])[.,])"
+    rf"(?:([А-ЯЁ])[.,]?\s*([А-ЯЁ]?)[.,]?|([А-ЯЁ][а-яё]{{2,}})\s+([А-ЯЁ])[.,])"
 )
 
 WEEK_LIST_RE = re.compile(r"\b\d{1,2}(?:\s*,\s*\d{1,2})+\s*н\.?\b")
@@ -284,13 +285,13 @@ def _parse_sheet(name: str, grid: list[list[str]]) -> list[dict]:
                 extras = []
                 if fin["marker"]:
                     extras.append(fin["marker"])
-                if fin["weeks"]:
-                    extras.append("нед. " + "; ".join(
-                        re.sub(r"\s*,\s*", ",", w) for w in fin["weeks"]))
+                # Недели — в отдельное поле (для развёртки по неделям семестра),
+                # в title остаётся только человекочитаемая пометка о типе занятия.
+                weeks_spec = "; ".join(re.sub(r"\s*,\s*", ",", w) for w in fin["weeks"])
                 if extras:
                     title = f"{title} ({', '.join(extras)})"
                 for teacher in fin["teachers"]:
-                    items.append({
+                    item = {
                         "title": title,
                         "day_of_week": s["day"],
                         "start_time": s["start"],
@@ -301,7 +302,10 @@ def _parse_sheet(name: str, grid: list[list[str]]) -> list[dict]:
                         "teacher": teacher,
                         "source": "xls_import",
                         "sheet": name,
-                    })
+                    }
+                    if weeks_spec:
+                        item["weeks"] = weeks_spec
+                    items.append(item)
     return items
 
 
@@ -324,12 +328,13 @@ def parse_xls_schedule(file_bytes: bytes, filename: str) -> list[dict]:
         except Exception:
             continue
 
-    # Дедупликация внутри файла (один преподаватель, одна пара продублирована)
+    # Дедупликация внутри файла (одна и та же пара продублирована в сетке).
+    # weeks в ключе — иначе «верх» и «низ» одной пары схлопнутся в одну запись.
     seen = set()
     uniq = []
     for it in items:
         key = (it["teacher"].lower(), it["day_of_week"], it["start_time"],
-               it["title"].lower(), it["group_name"])
+               it["title"].lower(), it["group_name"], it.get("weeks", ""))
         if key in seen:
             continue
         seen.add(key)

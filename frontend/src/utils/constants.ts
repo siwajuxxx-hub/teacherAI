@@ -44,6 +44,6 @@ export const MONTHS_GENITIVE = [
 
 export const ROLES = {
   admin: 'Администратор',
-  manager: 'Завуч',
+  manager: 'Административная учетная запись',
   teacher: 'Учитель',
 } as const;

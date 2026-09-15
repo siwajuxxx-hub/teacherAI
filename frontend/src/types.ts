@@ -15,6 +15,8 @@ export interface ScheduleItem {
   user_id: string;
   title: string;
   day_of_week: number;      // 0=ПН … 6=ВС
+  event_date: string | null;  // YYYY-MM-DD — конкретный день; null = недельный шаблон
+  weeks: string | null;       // фильтр недель шаблона: "3,7", "2 по 12", "верх"/"низ"
   start_time: string;       // "HH:MM"
   end_time: string;         // "HH:MM"
   group_name: string;
@@ -28,7 +30,9 @@ export interface ScheduleItem {
 export interface ScheduleCreatePayload {
   user_id?: string;
   title: string;
-  day_of_week: number;
+  day_of_week?: number;
+  event_date?: string | null;
+  weeks?: string | null;
   start_time: string;
   end_time: string;
   group_name?: string;
@@ -106,30 +110,72 @@ export interface ChatMessage {
   created_at: string;
 }
 
-export interface ParsedScheduleResponse {
-  status: string;
+// ── Новый контракт чата: server-side Proposal ────────────────
+
+export type ProposalKind = 'IMPORT_PLAN' | 'ACTIONS' | 'CLEAR';
+
+export interface ProposalItem {
+  text: string;
+  kind?: string;
+}
+
+/** Карточка предложения (любые записи/удаления — только через неё). */
+export interface Proposal {
+  id: string;
+  kind: ProposalKind;
+  summary: string;
+  items: ProposalItem[];   // максимум 30 публичных строк
+  total: number;           // всего строк в предложении
+}
+
+export interface QuestionReply { label: string; value: string }
+
+/** Вопрос системы с кнопками быстрого ответа. */
+export interface QuestionEnvelope {
+  text: string;
+  replies: QuestionReply[];
+}
+
+export interface ImportInfo {
+  id: string;
   filename: string;
-  items: ScheduleCreatePayload[];
-  extracted_text: string;
+  kind: 'WEEKLY' | 'DATED' | 'PDF_IMPORT' | string;
+  state: 'ASK_PERIOD' | 'ASK_END' | 'READY' | 'APPLIED' | 'CANCELLED' | string;
+  period_start: string | null;
+  period_end: string | null;
+}
+
+/** Ответ POST /chat/upload. */
+export interface UploadEnvelope {
+  status: 'proposal' | 'question' | 'info';
   message: string;
+  filename: string;
+  question?: QuestionEnvelope | null;
+  proposal?: Proposal | null;
+  import?: ImportInfo | null;
 }
 
-/** Действие, предложенное AI в чате (требует подтверждения). */
-export interface ChatAction {
-  action: string;
-  params: Record<string, unknown>;
-  description: string;
+/** Ответ GET /chat/history. */
+export interface ChatHistoryEnvelope {
+  messages: ChatMessage[];
+  pending_proposal: Proposal | null;
+  question: QuestionEnvelope | null;
+  import: ImportInfo | null;
 }
 
-/** Результат выполнения действия. */
-export interface ActionResult {
-  action: string;
-  ok: boolean;
-  message: string;
+/** Кадр SSE от POST /chat/send. */
+export interface SseFrame {
+  chunk?: string;
+  done?: boolean;
+  final_text?: string;
+  message_id?: string | null;
+  proposal?: Proposal | null;
+  question?: QuestionEnvelope | null;
+  error?: boolean;
 }
 
-export interface ExecuteActionsResponse {
-  results: ActionResult[];
+export interface ConfirmResult {
   ok: boolean;
   report: string;
+  proposal_id?: string;
 }

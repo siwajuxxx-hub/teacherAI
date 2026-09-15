@@ -77,31 +77,56 @@ TOOL_PROMPT = """
 
 Расписание (календарь):
 - create_schedule — добавить пару
-  params: {"title": "Название", "day_of_week": 0, "start_time": "09:00", "end_time": "10:30",
+  params: {"title": "Название", "day_of_week": 0, "date": "YYYY-MM-DD или НЕ указывать",
+           "start_time": "09:00", "end_time": "10:30",
            "group_name": "ЭС1-24з", "room": "529", "type": "lesson|meeting|other"}
-- update_schedule — изменить пару: перенести на другой день/время, сменить аудиторию,
-  группу, название, а также ПРЕПОДАВАТЕЛЯ (только управляющий/админ)
-  params: {"title": "как найти пару", "day_of_week": 3, "start_time": "12:00", "end_time": "13:30",
+  «завтра/25 сентября/в конкретный день» → ОБЯЗАТЕЛЬНО date (+день подставится сам).
+  Регулярная пара без даты («по пятницам») → только day_of_week, date не указывай.
+  Ты НЕ УКАЗЫВАЕШЬ чужого владельца: если управляющий просит «поставь преподавателю X
+  пару» — добавь "teacher_name": "X" (система сама найдёт владельца).
+- update_schedule — изменить пару: перенести на другой день/дату/время, сменить аудиторию,
+  группу, название, а также ПРЕПОДАВАТЕЛЯ-ВЛАДЕЛЬЦА (только управляющий/админ)
+  params: {"title": "как найти пару", "date": "YYYY-MM-DD", "day_of_week": 3,
+           "start_time": "12:00", "end_time": "13:30",
            "room": "401", "group_name": "ЭО1-24з", "new_title": "Новое название",
-           "teacher_name": "Фамилия И.О."}
-  — указывай ТОЛЬКО те поля, которые надо изменить.
+           "teacher_name": "Фамилия И.О.", "target_teacher_name": "Фамилия И.О."}
+  — указывай ТОЛЬКО те поля, которые надо изменить;
+  — teacher_name — ЧЬЮ пару править (нужно управляющему, когда говорит про другого);
+  — target_teacher_name — НА КОГО перенести пару (только управляющий/админ).
 - delete_schedule — удалить пару
-  params: {"title": "как найти пару"}
+  params: {"title": "как найти пару", "date": "YYYY-MM-DD", "day_of_week": 3,
+           "teacher_name": "Фамилия И.О." (для управляющего — чью)}
 
 ### Правила
 1. day_of_week: 0=Понедельник, 1=Вторник, 2=Среда, 3=Четверг, 4=Пятница, 5=Суббота, 6=Воскресенье.
 2. Даты считай от сегодняшней (она указана выше). «Завтра», «в пятницу» — вычисли конкретную дату YYYY-MM-DD.
-3. В поле "title" для update/delete — укажи узнаваемую часть названия, как оно есть в списках выше.
+3. В поле "title" для update/delete — указывай узнаваемую часть названия, как оно есть в списках выше.
 4. Перед блоком ```actions обязательно напиши короткое пояснение человеческим языком.
 5. Если действие не требуется (просто вопрос) — блок actions НЕ добавляй.
 6. Никогда не выдумывай записи: опирайся только на списки расписания и задач выше.
+7. Содержимого файлов ты не видишь — в контексте бывает только сводка последнего
+   импорта (кто и сколько пар). Команды «добавь пары X ко мне», «перенеси в её
+   календарь», «распредели всем» система исполняет сама из сохранённого импорта —
+   отвечай на них словами, НЕ создавай create_schedule по памяти.
+   create_schedule допустим только для одиночной пары, где пользователь сам назвал
+   день недели/дату и/или время («в пятницу на 12:00», «завтра в 14:00»).
+8. Очистку календаря («очисти всё», «удали все пары в среду») система делает сама
+   через карточку подтверждения — действий delete_schedule «на всё» НЕ создавай,
+   удаляй точечно только явно названные предметы.
 
 ### Пример
 Пользователь: «Перенеси пару по математике с понедельника на среду в 401 аудиторию»
-Ответ: Переношу пару «Математика» на среду, аудитория 401.
+Ответ: Перенесу пару «Математика» на среду, аудитория 401.
 
 ```actions
 [{"action":"update_schedule","params":{"title":"Математика","day_of_week":2,"room":"401"}}]
+```
+
+Пользователь (управляющий): «Поставь Гаврилову собрание в пятницу 25 сентября в 14:00»
+Ответ: Предлагаю добавить Гаврилову собрание в пятницу 25.09 в 14:00.
+
+```actions
+[{"action":"create_schedule","params":{"title":"Собрание","date":"2026-09-25","start_time":"14:00","end_time":"15:30","type":"meeting","teacher_name":"Гаврилову"}}]
 ```
 """
 
@@ -420,6 +445,12 @@ def describe_action(a: dict) -> str:
     if act == "create_schedule":
         d = p.get("day_of_week")
         day = DAYS[d] if isinstance(d, int) and 0 <= d < 7 else "?"
+        if p.get("date"):
+            try:
+                dt = date.fromisoformat(str(p["date"])[:10])
+                day = f"{dt.strftime('%d.%m.%Y')} ({day})"
+            except ValueError:
+                pass
         tm = ""
         if p.get("start_time"):
             tm = f" {p['start_time']}"
@@ -519,7 +550,7 @@ async def _create_task(db, user, p: dict) -> tuple[bool, str]:
         return False, label
 
     task = Task(
-        user_id=user.id,
+        user_id=p.get("_owner_id") or user.id,
         title=title,
         description=p.get("description", "") or "",
         status=TaskStatus.PENDING,
@@ -527,6 +558,7 @@ async def _create_task(db, user, p: dict) -> tuple[bool, str]:
         due_date=due_date,
         due_month=due_month,
         due_year=due_year,
+        assigned_by=None if (p.get("_owner_id") or user.id) == user.id else user.id,
     )
     db.add(task)
     await db.flush()
@@ -534,7 +566,7 @@ async def _create_task(db, user, p: dict) -> tuple[bool, str]:
 
 
 async def _update_task(db, user, p: dict) -> tuple[bool, str]:
-    task = await _find_task(db, user, p.get("title") or p.get("id") or "")
+    task = await _find_task(db, user, p.get("id") or p.get("title") or "")
     if not task:
         return False, f"Задача «{p.get('title')}» не найдена"
     if not _can_touch(user, task.user_id):
@@ -566,7 +598,7 @@ async def _update_task(db, user, p: dict) -> tuple[bool, str]:
 
 
 async def _update_task_status(db, user, p: dict) -> tuple[bool, str]:
-    task = await _find_task(db, user, p.get("title") or p.get("id") or "")
+    task = await _find_task(db, user, p.get("id") or p.get("title") or "")
     if not task:
         return False, f"Задача «{p.get('title')}» не найдена"
     if not _can_touch(user, task.user_id):
@@ -586,7 +618,7 @@ async def _update_task_status(db, user, p: dict) -> tuple[bool, str]:
 
 
 async def _delete_task(db, user, p: dict) -> tuple[bool, str]:
-    task = await _find_task(db, user, p.get("title") or p.get("id") or "")
+    task = await _find_task(db, user, p.get("id") or p.get("title") or "")
     if not task:
         return False, f"Задача «{p.get('title')}» не найдена"
     if not _can_touch(user, task.user_id):
@@ -604,9 +636,16 @@ async def _create_schedule(db, user, p: dict) -> tuple[bool, str]:
     if not title:
         return False, "Не указано название пары"
 
-    day = p.get("day_of_week", 0)
+    # Конкретная дата («завтра в 14:00») или недельный шаблон (только day_of_week)
+    event_date = _parse_date(p.get("date"))
+    if p.get("date") and not event_date:
+        return False, "Неверный формат даты (ожидается YYYY-MM-DD)"
+
+    day = p.get("day_of_week")
+    if day is None and event_date:
+        day = event_date.weekday()
     try:
-        day = int(day)
+        day = int(day if day is not None else 0)
     except (TypeError, ValueError):
         return False, "Неверный день недели"
     if not 0 <= day <= 6:
@@ -618,8 +657,10 @@ async def _create_schedule(db, user, p: dict) -> tuple[bool, str]:
     except Exception:
         return False, "Неверный формат времени (ожидается HH:MM)"
 
+    # Владелец: по умолчанию — подтвердивший; для менеджера grounding кладёт _owner_id
+    owner_id = p.get("_owner_id") or user.id
     s = Schedule(
-        user_id=user.id,
+        user_id=owner_id,
         title=title,
         day_of_week=day,
         start_time=start,
@@ -627,16 +668,18 @@ async def _create_schedule(db, user, p: dict) -> tuple[bool, str]:
         group_name=p.get("group_name", "") or "",
         room=p.get("room", "") or "",
         type=_parse_type(p.get("type", "lesson")),
-        source=ScheduleSource.MANUAL,
+        source=ScheduleSource.MANUAL if owner_id == user.id else ScheduleSource.MANAGER,
         created_by=user.id,
+        event_date=event_date,
     )
     db.add(s)
     await db.flush()
-    return True, f"Пара «{title}» добавлена в календарь ({DAYS[day]}, {start.strftime('%H:%M')})"
+    when = event_date.strftime("%d.%m") if event_date else DAYS[day]
+    return True, f"Пара «{title}» добавлена ({when}, {start.strftime('%H:%M')})"
 
 
 async def _update_schedule(db, user, p: dict) -> tuple[bool, str]:
-    entry = await _find_schedule(db, user, p.get("title") or p.get("id") or "")
+    entry = await _find_schedule(db, user, p.get("id") or p.get("title") or "")
     if not entry:
         return False, f"Пара «{p.get('title')}» не найдена"
 
@@ -650,6 +693,16 @@ async def _update_schedule(db, user, p: dict) -> tuple[bool, str]:
     if p.get("new_title"):
         entry.title = p["new_title"]
         changed.append("название")
+
+    # Перенос на конкретную дату («перенеси пару на 25 сентября»)
+    if p.get("date"):
+        new_date = _parse_date(p["date"])
+        if not new_date:
+            return False, "Неверный формат даты (ожидается YYYY-MM-DD)"
+        entry.event_date = new_date
+        if p.get("day_of_week") is None:
+            entry.day_of_week = new_date.weekday()
+        changed.append(f"дата → {new_date.strftime('%d.%m.%Y')}")
 
     if p.get("day_of_week") is not None:
         try:
@@ -705,7 +758,7 @@ async def _update_schedule(db, user, p: dict) -> tuple[bool, str]:
 
 
 async def _delete_schedule(db, user, p: dict) -> tuple[bool, str]:
-    entry = await _find_schedule(db, user, p.get("title") or p.get("id") or "")
+    entry = await _find_schedule(db, user, p.get("id") or p.get("title") or "")
     if not entry:
         return False, f"Пара «{p.get('title')}» не найдена"
 
@@ -726,6 +779,13 @@ async def _find_task(db, user, needle: str) -> Task | None:
     if not needle:
         return None
 
+    # Точный id (после заземления действий в chat_exec) — самый надёжный путь
+    if len(needle) == 36 and "-" in needle:
+        t = await db.get(Task, needle)
+        if t and _can_touch(user, t.user_id):
+            return t
+        return None
+
     # Точное совпадение по названию (сначала среди своих)
     r = await db.execute(select(Task).where(Task.title.ilike(needle)))
     for t in r.scalars().all():
@@ -744,6 +804,12 @@ async def _find_task(db, user, needle: str) -> Task | None:
 async def _find_schedule(db, user, needle: str) -> Schedule | None:
     needle = (needle or "").strip()
     if not needle:
+        return None
+
+    if len(needle) == 36 and "-" in needle:
+        s = await db.get(Schedule, needle)
+        if s and _can_touch(user, s.user_id):
+            return s
         return None
 
     r = await db.execute(select(Schedule).where(Schedule.title.ilike(needle)))

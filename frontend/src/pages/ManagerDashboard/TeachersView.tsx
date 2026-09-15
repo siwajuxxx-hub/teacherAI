@@ -11,6 +11,7 @@ import {
   X,
   Loader2,
   AlertCircle,
+  Trash2,
 } from 'lucide-react';
 import { useAuthStore } from '../../store/auth';
 import * as api from '../../api/client';
@@ -91,6 +92,7 @@ const TeachersView: React.FC = () => {
 
   const [showMeetingModal, setShowMeetingModal] = useState(false);
   const [showTaskModal, setShowTaskModal] = useState(false);
+  const [editItem, setEditItem] = useState<ScheduleItem | null>(null);
 
   // ── fetch ────────────────────────────────────────────────
   const fetchTeachers = useCallback(async () => {
@@ -142,6 +144,18 @@ const TeachersView: React.FC = () => {
         /* ignore */
       }
     }
+  };
+
+  // ── менеджер правит чужой календарь вручную ──────────────
+  const handleDeleteSchedule = async (id: string) => {
+    if (!confirm('Удалить эту пару из расписания преподавателя?')) return;
+    try { await api.deleteSchedule(id); await refreshExpanded(); window.dispatchEvent(new CustomEvent('data-changed')); }
+    catch { alert('Не удалось удалить запись'); }
+  };
+  const handleDeleteTask = async (id: string) => {
+    if (!confirm('Удалить эту задачу преподавателя?')) return;
+    try { await api.deleteTask(id); await refreshExpanded(); window.dispatchEvent(new CustomEvent('data-changed')); }
+    catch { alert('Не удалось удалить задачу'); }
   };
 
   // ── filtered ─────────────────────────────────────────────
@@ -247,7 +261,7 @@ const TeachersView: React.FC = () => {
                           <Calendar size={16} className="text-blue-500" />
                           Расписание на неделю
                         </h3>
-                        <MiniSchedule entries={schedule} />
+                        <MiniSchedule entries={schedule} onDelete={handleDeleteSchedule} onEdit={setEditItem} />
                       </div>
                       {/* Mini kanban */}
                       <div className="p-5">
@@ -255,7 +269,7 @@ const TeachersView: React.FC = () => {
                           <CheckSquare size={16} className="text-indigo-500" />
                           Задачи
                         </h3>
-                        <MiniKanban tasks={tasks} />
+                        <MiniKanban tasks={tasks} onDelete={handleDeleteTask} />
                       </div>
                     </div>
                   )}
@@ -286,12 +300,22 @@ const TeachersView: React.FC = () => {
           refreshExpanded();
         }}
       />
+      <EditScheduleModal
+        item={editItem}
+        teachers={teachers}
+        onClose={() => setEditItem(null)}
+        onSaved={() => { setEditItem(null); refreshExpanded(); window.dispatchEvent(new CustomEvent('data-changed')); }}
+      />
     </div>
   );
 };
 
 // ─── Mini schedule ───────────────────────────────────────────
-const MiniSchedule: React.FC<{ entries: ScheduleItem[] }> = ({ entries }) => {
+const MiniSchedule: React.FC<{
+  entries: ScheduleItem[];
+  onDelete: (id: string) => void;
+  onEdit: (item: ScheduleItem) => void;
+}> = ({ entries, onDelete, onEdit }) => {
   const grouped = groupByDay(entries);
   if (entries.length === 0) {
     return <p className="text-sm text-gray-400 italic">Нет записей в расписании</p>;
@@ -305,12 +329,23 @@ const MiniSchedule: React.FC<{ entries: ScheduleItem[] }> = ({ entries }) => {
             {grouped[idx].map((e) => (
               <div
                 key={e.id}
-                className={`text-[10px] leading-tight px-1 py-0.5 rounded border ${scheduleTypeColor(e.type)}`}
-                title={`${e.title} | ${formatTime(e.start_time)}–${formatTime(e.end_time)}${e.room ? ` | ${e.room}` : ''}`}
+                onClick={() => onEdit(e)}
+                className={`group relative cursor-pointer text-[10px] leading-tight px-1 py-0.5 rounded border ${scheduleTypeColor(e.type)}`}
+                title={`${e.title} | ${formatTime(e.start_time)}–${formatTime(e.end_time)}${e.room ? ` | ${e.room}` : ''} — клик, чтобы изменить`}
               >
                 <div className="font-medium truncate">{e.title}</div>
                 <div>{formatTime(e.start_time)}</div>
+                {e.event_date
+                  ? <div className="text-[9px] text-gray-500">{e.event_date.split('-').reverse().slice(0, 2).join('.')}</div>
+                  : e.weeks ? <div className="text-[9px] text-gray-500">нед. {e.weeks}</div> : null}
                 {e.room && <div className="truncate text-gray-500">{e.room}</div>}
+                <button
+                  onClick={(ev) => { ev.stopPropagation(); onDelete(e.id); }}
+                  className="hidden group-hover:flex absolute top-0 right-0 items-center justify-center w-4 h-4 rounded-full bg-red-100 text-red-600 hover:bg-red-200"
+                  title="Удалить пару"
+                >
+                  <Trash2 size={9} />
+                </button>
               </div>
             ))}
           </div>
@@ -321,7 +356,7 @@ const MiniSchedule: React.FC<{ entries: ScheduleItem[] }> = ({ entries }) => {
 };
 
 // ─── Mini kanban ─────────────────────────────────────────────
-const MiniKanban: React.FC<{ tasks: TaskItem[] }> = ({ tasks }) => {
+const MiniKanban: React.FC<{ tasks: TaskItem[]; onDelete: (id: string) => void }> = ({ tasks, onDelete }) => {
   const cols = groupTasksByStatus(tasks);
   const statuses = ['pending', 'in_progress', 'done'];
   if (tasks.length === 0) {
@@ -335,7 +370,7 @@ const MiniKanban: React.FC<{ tasks: TaskItem[] }> = ({ tasks }) => {
             {statusLabel(s)}
           </div>
           {cols[s].slice(0, 4).map((t) => (
-            <div key={t.id} className="bg-white border border-gray-200 rounded-lg p-2 text-xs shadow-sm">
+            <div key={t.id} className="group relative bg-white border border-gray-200 rounded-lg p-2 text-xs shadow-sm">
               <div className="font-medium text-gray-800 truncate">{t.title}</div>
               <span className={`inline-block mt-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${scopeColor(t.scope)}`}>
                 {scopeLabel(t.scope)}
@@ -347,6 +382,13 @@ const MiniKanban: React.FC<{ tasks: TaskItem[] }> = ({ tasks }) => {
                     : `${t.due_year} год`}
                 </div>
               )}
+              <button
+                onClick={() => onDelete(t.id)}
+                className="hidden group-hover:flex absolute top-1 right-1 items-center justify-center w-5 h-5 rounded-full bg-red-100 text-red-600 hover:bg-red-200"
+                title="Удалить задачу"
+              >
+                <Trash2 size={11} />
+              </button>
             </div>
           ))}
           {cols[s].length > 4 && (
@@ -623,6 +665,111 @@ const TaskModal: React.FC<{
           {saving ? <Loader2 size={16} className="animate-spin" /> : <CheckSquare size={16} />}
           {saving ? 'Сохранение...' : 'Поставить задачу'}
         </button>
+      </form>
+    </Modal>
+  );
+};
+
+// ─── Edit schedule item modal (ручная правка любой пары менеджером) ──
+const EditScheduleModal: React.FC<{
+  item: ScheduleItem | null;
+  teachers: UserType[];
+  onClose: () => void;
+  onSaved: () => void;
+}> = ({ item, teachers, onClose, onSaved }) => {
+  const [form, setForm] = useState({
+    title: '', start_time: '09:00', end_time: '10:00', group_name: '', room: '',
+    dateOnly: false, dateValue: '', weeks: '', owner: '',
+  });
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    if (!item) return;
+    setForm({
+      title: item.title, start_time: item.start_time, end_time: item.end_time,
+      group_name: item.group_name, room: item.room,
+      dateOnly: !!item.event_date, dateValue: item.event_date || '',
+      weeks: item.weeks || '', owner: item.user_id,
+    });
+    setErr('');
+  }, [item]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!item) return;
+    if (form.dateOnly && !form.dateValue) { setErr('Укажите дату'); return; }
+    setSaving(true);
+    setErr('');
+    try {
+      const payload: Record<string, unknown> = {
+        title: form.title,
+        start_time: form.start_time, end_time: form.end_time,
+        group_name: form.group_name, room: form.room,
+        event_date: form.dateOnly ? form.dateValue : '',
+        weeks: form.dateOnly ? '' : form.weeks.trim(),
+      };
+      if (!form.dateOnly) payload.day_of_week = item.day_of_week;
+      if (form.owner && form.owner !== item.user_id) payload.user_id = form.owner;
+      await api.updateSchedule(item.id, payload as Parameters<typeof api.updateSchedule>[1]);
+      onSaved();
+    } catch (ex: any) {
+      setErr(ex?.response?.data?.detail || 'Не удалось сохранить');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal open={!!item} onClose={onClose} title="Правка записи расписания">
+      <form onSubmit={submit} className="space-y-3">
+        {err && <div className="text-sm text-red-600 bg-red-50 p-2 rounded-lg">{err}</div>}
+        <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required
+          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
+        <div className="grid grid-cols-2 gap-3">
+          <input type="time" value={form.start_time} onChange={(e) => setForm({ ...form, start_time: e.target.value })}
+            className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
+          <input type="time" value={form.end_time} onChange={(e) => setForm({ ...form, end_time: e.target.value })}
+            className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <input value={form.group_name} onChange={(e) => setForm({ ...form, group_name: e.target.value })} placeholder="Группа"
+            className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
+          <input value={form.room} onChange={(e) => setForm({ ...form, room: e.target.value })} placeholder="Кабинет"
+            className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
+        </div>
+        <div className="grid grid-cols-2 gap-1.5">
+          <button type="button" onClick={() => setForm({ ...form, dateOnly: false })}
+            className={`px-2 py-1.5 rounded-lg text-xs font-medium border ${!form.dateOnly ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}`}>
+            Каждую неделю ({DAYS_SHORT[item?.day_of_week ?? 0]})
+          </button>
+          <button type="button" onClick={() => setForm({ ...form, dateOnly: true, dateValue: form.dateValue || item?.event_date || '' })}
+            className={`px-2 py-1.5 rounded-lg text-xs font-medium border ${form.dateOnly ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200'}`}>
+            На конкретную дату
+          </button>
+        </div>
+        {form.dateOnly ? (
+          <input type="date" value={form.dateValue} onChange={(e) => setForm({ ...form, dateValue: e.target.value })}
+            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm" />
+        ) : (
+          <input value={form.weeks} onChange={(e) => setForm({ ...form, weeks: e.target.value })}
+            placeholder="Фильтр недель (пусто = все): 3,7 · 2 по 12 · верх/низ"
+            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-xs" />
+        )}
+        <div>
+          <label className="block text-xs text-gray-500 mb-1">Преподаватель (перенос — если выбрать другого)</label>
+          <select value={form.owner} onChange={(e) => setForm({ ...form, owner: e.target.value })}
+            className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm">
+            {teachers.map((t) => <option key={t.id} value={t.id}>{t.full_name}</option>)}
+          </select>
+        </div>
+        <div className="flex gap-2 pt-1">
+          <button type="submit" disabled={saving}
+            className="flex-1 py-2 bg-blue-600 text-white text-sm font-medium rounded-xl hover:bg-blue-700 disabled:opacity-50">
+            {saving ? 'Сохранение…' : 'Сохранить'}
+          </button>
+          <button type="button" onClick={onClose} className="py-2 px-4 bg-gray-100 text-sm rounded-xl">Отмена</button>
+        </div>
       </form>
     </Modal>
   );

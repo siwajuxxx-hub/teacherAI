@@ -14,8 +14,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.data_models import Schedule
 
 
-def dup_key(title: str, day_of_week: int, start_time: str, end_time: str, group_name: str = "") -> str:
-    """Ключ уникальности пары внутри расписания одного преподавателя."""
+def dup_key(title: str, day_of_week: int, start_time: str, end_time: str, group_name: str = "",
+            event_date: str = "", weeks: str = "") -> str:
+    """Ключ уникальности пары внутри расписания одного преподавателя.
+
+    event_date различает «шаблон на среду» и «занятие на конкретную среду»;
+    weeks различает верх/низ недели (одно время, но разные недели семестра).
+    """
     t = (title or "").strip().lower()
     g = (group_name or "").strip().lower()
     s = str(start_time or "")[:5]
@@ -24,17 +29,21 @@ def dup_key(title: str, day_of_week: int, start_time: str, end_time: str, group_
         d = int(day_of_week)
     except (TypeError, ValueError):
         d = -1
-    return f"{t}|{d}|{s}|{e}|{g}"
+    dt = str(event_date or "")[:10]
+    wk = (weeks or "").strip().lower().replace(" ", "")
+    return f"{t}|{d}|{s}|{e}|{g}|{dt}|{wk}"
 
 
 def item_key(item: dict) -> str:
-    """Ключ для элемента из AI-парсинга или из API."""
+    """Ключ для элемента импорта или из API."""
     return dup_key(
         item.get("title", ""),
         item.get("day_of_week", 0),
         item.get("start_time", ""),
         item.get("end_time", ""),
         item.get("group_name", ""),
+        item.get("event_date", "") or "",
+        item.get("weeks", "") or "",
     )
 
 
@@ -49,6 +58,8 @@ async def load_existing_keys(db: AsyncSession, user_id: str) -> set[str]:
             s.start_time.strftime("%H:%M"),
             s.end_time.strftime("%H:%M"),
             s.group_name,
+            s.event_date.isoformat() if s.event_date else "",
+            s.weeks or "",
         ))
     return keys
 

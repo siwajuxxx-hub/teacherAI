@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, Plus, X, Trash2, Clock, MapPin, Users, Flag, AlertCircle } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Plus, X, Trash2, Clock, MapPin, Users, Flag, Repeat, CalendarDays } from 'lucide-react';
 import * as api from '../../api/client';
-import type { ScheduleItem, TaskItem, ScheduleCreatePayload } from '../../types';
-import { DAYS_OF_WEEK, DAYS_SHORT, SCHEDULE_TYPES, TASK_STATUSES, TASK_SCOPES, MONTHS_NOMINATIVE } from '../../utils/constants';
+import type { ScheduleItem, TaskItem } from '../../types';
+import { DAYS_SHORT, SCHEDULE_TYPES, TASK_STATUSES, TASK_SCOPES, MONTHS_NOMINATIVE } from '../../utils/constants';
+import { itemAppliesOn, mondayOf, toISO } from '../../utils/schedule_view';
 
 const MONTH_NAMES = ['Январь','Февраль','Март','Апрель','Май','Июнь','Июль','Август','Сентябрь','Октябрь','Ноябрь','Декабрь'];
 
@@ -50,7 +51,11 @@ export default function CalendarTab() {
   const [editingItem, setEditingItem] = useState<ScheduleItem | null>(null);
   const [addTaskMode, setAddTaskMode] = useState(false);
 
-  const [form, setForm] = useState({ title:'', start_time:'09:00', end_time:'10:30', group_name:'', room:'', type:'lesson' as 'lesson' | 'meeting' | 'other' });
+  const [form, setForm] = useState({
+    title: '', start_time: '09:00', end_time: '10:30', group_name: '', room: '',
+    type: 'lesson' as 'lesson' | 'meeting' | 'other',
+    dateOnly: false, dateValue: fmtDate(selectedDate), weeks: '',
+  });
   const [taskForm, setTaskForm] = useState({
     title: '', description: '', scope: 'day' as 'day' | 'month' | 'year',
     due_date: fmtDate(selectedDate) || '',
@@ -82,15 +87,19 @@ export default function CalendarTab() {
 
   const days = useMemo(() => getMonthDays(year, month), [year, month]);
 
-  // Расписание на выбранный день — сопоставляем день недели
+  // Неделя-1 для фильтра «верх/низ» — текущий понедельник (как на сервере)
+  const weekAnchor = useMemo(() => mondayOf(today), [today.getFullYear(), today.getMonth(), today.getDate()]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const selectedDayOfWeek = useMemo(() => {
     const d = selectedDate.getDay();
     return d === 0 ? 6 : d - 1;
   }, [selectedDate]);
 
+  // Расписание на выбранный ДЕНЬ: датированные — ровно в свою дату,
+  // недельные шаблоны — по дню недели с учётом фильтра недель
   const daySchedule = useMemo(() => {
-    return schedule.filter(s => s.day_of_week === selectedDayOfWeek);
-  }, [schedule, selectedDayOfWeek]);
+    return schedule.filter(s => itemAppliesOn(s, selectedDate, weekAnchor));
+  }, [schedule, selectedDate, weekAnchor]);
 
   const dayTasks = useMemo(() => {
     const iso = fmtDate(selectedDate);
@@ -103,33 +112,33 @@ export default function CalendarTab() {
     });
   }, [tasks, selectedDate]);
 
-  // События текущего месяца для точек
+  // События текущего месяца для точек (ключ — ISO-дата)
   const monthEvents = useMemo(() => {
     const map: Record<string, { sched: number; tasks: number }> = {};
+    const bump = (iso: string, field: 'sched' | 'tasks') => {
+      if (!map[iso]) map[iso] = { sched: 0, tasks: 0 };
+      map[iso][field]++;
+    };
+    // Разворачиваем каждую запись на реальные даты месяца
+    const inMonth: Date[] = [];
+    for (let d = 1; d <= new Date(year, month + 1, 0).getDate(); d++) inMonth.push(new Date(year, month, d));
     schedule.forEach(s => {
-      const key = s.day_of_week;
-      if (!map[String(key)]) map[String(key)] = { sched: 0, tasks: 0 };
-      map[String(key)].sched++;
+      if (s.event_date) { bump(s.event_date, 'sched'); return; }
+      inMonth.forEach(d => { if (itemAppliesOn(s, d, weekAnchor)) bump(toISO(d), 'sched'); });
     });
     tasks.forEach(t => {
       if (t.due_date) {
-        map[t.due_date] = map[t.due_date] || { sched: 0, tasks: 0 };
-        map[t.due_date].tasks++;
+        bump(t.due_date, 'tasks');
       } else if (t.scope === 'month' && t.due_month) {
-        // Отмечаем последний день месяца
-        const [y, m] = t.due_month.split('-').map(Number)
-        const last = new Date(y, m, 0)
-        const key = fmtDate(last)
-        map[key] = map[key] || { sched: 0, tasks: 0 }
-        map[key].tasks++
+        const [y, m] = t.due_month.split('-').map(Number);
+        const last = new Date(y, m, 0);
+        bump(fmtDate(last), 'tasks');
       } else if (t.scope === 'year' && t.due_year) {
-        const key = `${t.due_year}-12-31`
-        map[key] = map[key] || { sched: 0, tasks: 0 }
-        map[key].tasks++
+        bump(`${t.due_year}-12-31`, 'tasks');
       }
     });
     return map;
-  }, [schedule, tasks]);
+  }, [schedule, tasks, year, month, weekAnchor]);
 
   function prevMonth() { if (month === 0) { setMonth(11); setYear(y => y - 1); } else setMonth(m => m - 1); }
   function nextMonth() { if (month === 11) { setMonth(0); setYear(y => y + 1); } else setMonth(m => m + 1); }
@@ -137,9 +146,19 @@ export default function CalendarTab() {
   async function handleSaveSchedule() {
     try {
       if (editingItem) {
-        await api.updateSchedule(editingItem.id, form);
+        await api.updateSchedule(editingItem.id, {
+          title: form.title, start_time: form.start_time, end_time: form.end_time,
+          group_name: form.group_name, room: form.room, type: form.type,
+          event_date: form.dateOnly ? form.dateValue : '',
+          weeks: form.dateOnly ? '' : form.weeks.trim(),
+        });
       } else {
-        await api.createSchedule({ ...form, day_of_week: selectedDayOfWeek });
+        await api.createSchedule({
+          ...form,
+          day_of_week: selectedDayOfWeek,
+          event_date: form.dateOnly ? form.dateValue : null,
+          weeks: form.dateOnly ? null : (form.weeks.trim() || null),
+        });
       }
       setShowAddModal(false);
       setEditingItem(null);
@@ -198,7 +217,13 @@ export default function CalendarTab() {
       <div className="w-full lg:w-80 lg:flex-shrink-0 bg-white rounded-xl border border-gray-200 p-3 sm:p-4 lg:overflow-auto">
         <div className="flex items-center justify-between mb-3">
           <button onClick={prevMonth} className="p-1 hover:bg-gray-100 rounded"><ChevronLeft size={18} /></button>
-          <h3 className="font-semibold text-gray-800">{MONTH_NAMES[month]} {year}</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="font-semibold text-gray-800">{MONTH_NAMES[month]} {year}</h3>
+            <button onClick={() => { const t = new Date(); setYear(t.getFullYear()); setMonth(t.getMonth()); setSelectedDate(t); }}
+              className="text-xs px-2 py-1 bg-indigo-50 text-indigo-600 rounded-lg hover:bg-indigo-100 transition">
+              Сегодня
+            </button>
+          </div>
           <button onClick={nextMonth} className="p-1 hover:bg-gray-100 rounded"><ChevronRight size={18} /></button>
         </div>
 
@@ -254,7 +279,7 @@ export default function CalendarTab() {
             <button onClick={() => setAddTaskMode(true)} className="flex items-center gap-1 px-3 py-1.5 bg-purple-600 text-white rounded-lg text-sm hover:bg-purple-700 transition">
               <Flag size={14} /> Задача
             </button>
-            <button onClick={() => { setEditingItem(null); setForm({ title:'', start_time:'09:00', end_time:'10:30', group_name:'', room:'', type:'lesson' }); setShowAddModal(true); }}
+            <button onClick={() => { setEditingItem(null); setForm({ title:'', start_time:'09:00', end_time:'10:30', group_name:'', room:'', type:'lesson', dateOnly:false, dateValue: fmtDate(selectedDate), weeks:'' }); setShowAddModal(true); }}
               className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-sm hover:bg-indigo-700 transition">
               <Plus size={14} /> Занятие
             </button>
@@ -272,7 +297,7 @@ export default function CalendarTab() {
             <div className="space-y-2">
               {daySchedule.sort((a,b) => a.start_time.localeCompare(b.start_time)).map(s => (
                 <div key={s.id} className={`flex items-center gap-3 p-3 rounded-xl border ${TYPE_COLORS[s.type]} hover:shadow-sm transition cursor-pointer`}
-                  onClick={() => { setEditingItem(s); setForm({title:s.title,start_time:s.start_time,end_time:s.end_time,group_name:s.group_name,room:s.room,type:s.type}); setShowAddModal(true); }}>
+                  onClick={() => { setEditingItem(s); setForm({title:s.title,start_time:s.start_time,end_time:s.end_time,group_name:s.group_name,room:s.room,type:s.type,dateOnly:!!s.event_date,dateValue:s.event_date || fmtDate(selectedDate),weeks:s.weeks || ''}); setShowAddModal(true); }}>
                   <div className="text-sm font-bold w-14 text-center">
                     {s.start_time} <br /> <span className="text-xs opacity-60">{s.end_time}</span>
                   </div>
@@ -283,7 +308,16 @@ export default function CalendarTab() {
                       {s.room && <span className="flex items-center gap-1"><MapPin size={10} /> {s.room}</span>}
                     </div>
                   </div>
-                  <span className="text-xs px-2 py-0.5 rounded-full bg-white/60">{SCHEDULE_TYPES[s.type]}</span>
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-white/60">{SCHEDULE_TYPES[s.type]}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded-full flex items-center gap-1 ${s.event_date ? 'bg-white/70 text-gray-600' : 'bg-white/40 text-gray-500'}`}>
+                      {s.event_date ? <CalendarDays size={9} /> : <Repeat size={9} />}
+                      {s.event_date ? 'на дату' : 'каждую нед'}{s.weeks ? ` · ${s.weeks}` : ''}
+                    </span>
+                    {s.source === 'manager' && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700">от управляющего</span>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
@@ -361,6 +395,27 @@ export default function CalendarTab() {
               </select>
               <input type="text" value={form.group_name} onChange={e => setForm({...form, group_name: e.target.value})} placeholder="Группа" className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
               <input type="text" value={form.room} onChange={e => setForm({...form, room: e.target.value})} placeholder="Аудитория" className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
+              <div>
+                <label className="text-xs text-gray-500">Периодичность</label>
+                <div className="grid grid-cols-2 gap-1.5 mt-1">
+                  <button type="button" onClick={() => setForm({...form, dateOnly: false})}
+                    className={`px-2 py-1.5 rounded-lg text-xs font-medium border transition ${!form.dateOnly ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
+                    <Repeat size={11} className="inline mr-1 -mt-0.5" /> Каждую неделю ({DAYS_SHORT[selectedDayOfWeek]})
+                  </button>
+                  <button type="button" onClick={() => setForm({...form, dateOnly: true})}
+                    className={`px-2 py-1.5 rounded-lg text-xs font-medium border transition ${form.dateOnly ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
+                    <CalendarDays size={11} className="inline mr-1 -mt-0.5" /> Только в один день
+                  </button>
+                </div>
+                {form.dateOnly ? (
+                  <input type="date" value={form.dateValue} onChange={e => setForm({...form, dateValue: e.target.value})}
+                    className="w-full mt-2 px-3 py-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
+                ) : (
+                  <input type="text" value={form.weeks} onChange={e => setForm({...form, weeks: e.target.value})}
+                    placeholder="Фильтр недель (необязательно): 3,7 · 2 по 12 · верх/низ"
+                    className="w-full mt-2 px-3 py-2 border rounded-lg text-xs outline-none focus:ring-2 focus:ring-indigo-500" />
+                )}
+              </div>
             </div>
             <div className="flex gap-2 mt-4">
               <button onClick={handleSaveSchedule} className="flex-1 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700">Сохранить</button>
