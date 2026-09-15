@@ -3,6 +3,7 @@ import type {
   User, ScheduleItem, ScheduleCreatePayload, TaskItem, TaskCreatePayload,
   UserCreatePayload, UserUpdatePayload, AISettings, AISettingsUpdatePayload,
   ChatMessage, UploadEnvelope, ChatHistoryEnvelope, ConfirmResult,
+  NewsItem,
 } from '../types'
 
 const api = axios.create({
@@ -431,6 +432,66 @@ export async function getKeepalive() {
 export async function setKeepalive(enabled: boolean) {
   const { data } = await api.put('/settings/keepalive', { enabled })
   return data as KeepaliveStatus
+}
+
+// ── Новости ─────────────────────────────────────────────────
+
+export async function listNews(limit = 100): Promise<NewsItem[]> {
+  const { data } = await api.get('/news', { params: { limit } })
+  return (data.items ?? []) as NewsItem[]
+}
+
+export async function newsUnreadCount(): Promise<number> {
+  const { data } = await api.get('/news/unread')
+  return (data?.count ?? 0) as number
+}
+
+export async function markNewsRead(): Promise<void> {
+  await api.post('/news/read')
+}
+
+async function newsMultipart(path: string, method: string, form: FormData): Promise<NewsItem> {
+  const response = await authFetch(path, { method, body: form })
+  if (!response.ok) {
+    let detail = 'Не удалось сохранить новость'
+    try { detail = (await response.json()).detail || detail } catch { /* not json */ }
+    throw new Error(detail)
+  }
+  return response.json() as Promise<NewsItem>
+}
+
+export async function createNews(
+  title: string, body: string, pinned: boolean, files: File[],
+): Promise<NewsItem> {
+  const form = new FormData()
+  form.append('title', title)
+  form.append('body', body)
+  form.append('pinned', pinned ? 'true' : 'false')
+  files.forEach((f) => form.append('images', f))
+  return newsMultipart('/api/news', 'POST', form)
+}
+
+/** keepImages — имена уже сохранённых картинок, которые оставляем; files — новые. */
+export async function updateNews(
+  id: string, patch: { title?: string; body?: string; pinned?: boolean },
+  keepImages?: string[], files: File[] = [],
+): Promise<NewsItem> {
+  const form = new FormData()
+  if (patch.title !== undefined) form.append('title', patch.title)
+  if (patch.body !== undefined) form.append('body', patch.body)
+  if (patch.pinned !== undefined) form.append('pinned', patch.pinned ? 'true' : 'false')
+  if (keepImages !== undefined) form.append('keep_images', JSON.stringify(keepImages))
+  files.forEach((f) => form.append('images', f))
+  return newsMultipart(`/api/news/${id}`, 'PUT', form)
+}
+
+export async function deleteNews(id: string): Promise<void> {
+  await api.delete(`/news/${id}`)
+}
+
+export async function pinNews(id: string): Promise<NewsItem> {
+  const { data } = await api.patch(`/news/${id}/pin`)
+  return data as NewsItem
 }
 
 export default api

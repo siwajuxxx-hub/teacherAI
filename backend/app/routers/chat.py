@@ -54,6 +54,7 @@ router = APIRouter(prefix="/api/chat", tags=["Чат"])
 
 DAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 MAX_FILE_BYTES = 10 * 1024 * 1024
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".gif")
 
 # create_schedule из текста легитимен, только когда пользователь сам назвал
 # день/дату/время. «Добавь расписание Федуловой» конкретики не содержит —
@@ -468,6 +469,11 @@ async def _run_intent(db: AsyncSession, user: User, intent: Intent,
             return text, None, None
         return text, proposal, None
 
+    if k == "publish_news":
+        p, answer = await chat_exec.make_news_proposal(
+            db, user, intent.scope.get("text", ""))
+        return answer, (chat_exec.proposal_public(p) if p else None), None
+
     if k == "clear":
         p, text = await chat_exec.make_clear_proposal(db, user, message, intent.scope, intent.fio)
         if p is None:
@@ -500,6 +506,17 @@ async def chat_upload_file(
     query = (message or "").strip()
     fname = file.filename or "файл"
     ext = _os.path.splitext(fname)[1].lower()
+
+    # ── публикация новости через чат — важнее разбора расписания ──
+    ni = detect_intent(query, import_state="", today=date.today()) if query else None
+    if ni is not None and ni.kind == "publish_news":
+        return await _upload_news(db, current_user, fname, ext, file_bytes,
+                                  ni.scope.get("text", ""))
+    if ext in IMAGE_EXTS:
+        raise HTTPException(400, detail=(
+            "📷 Картинки в чате публикуются как новости: напишите "
+            "«опубликуй новость — <текст>» и прикрепите картинку "
+            "(доступно административной учётной записи и админу)."))
 
     try:
         items: list[dict] = []
@@ -650,6 +667,46 @@ async def chat_upload_file(
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail=friendly)
 
 
+async def _upload_news(db: AsyncSession, user: User, fname: str, ext: str,
+                       blob: bytes, text: str) -> dict:
+    """«опубликуй новость …» + (опц.) картинка → карточка NEWS (или отказ)."""
+    from app.services import news_store
+    head = f"[Файл: {fname}] опубликуй новость — {text}" if text else f"[Файл: {fname}] опубликуй новость"
+    await _store_msg(db, user.id, "user", head)
+    if not chat_exec._is_manager(user):
+        reply = chat_exec.NEWS_REFUSAL
+        await _store_msg(db, user.id, "assistant", reply)
+        return {"status": "info", "message": reply}
+
+    draft_id, names = "", []
+    if ext in IMAGE_EXTS:
+        news_store.prune_orphan_drafts()
+        draft_id = news_store.new_draft_id()
+        try:
+            names = news_store.save_draft_images(draft_id, [(blob, fname)])
+        except ValueError as e:
+            if draft_id:
+                news_store.delete_draft(draft_id)
+            reply = f"❌ {e}"
+            await _store_msg(db, user.id, "assistant", reply)
+            return {"status": "info", "message": reply}
+    elif not text:
+        reply = (f"Файл «{fname}» — не картинка, и текста нет: новостью он не стал. "
+                 "Напишите «опубликуй новость — <текст>» (картинку можно приложить 📎).")
+        await _store_msg(db, user.id, "assistant", reply)
+        return {"status": "info", "message": reply}
+
+    note = "" if ext in IMAGE_EXTS else \
+        f"Файл «{fname}» — не картинка, в новость он не попадёт.\n"
+    p, answer = await chat_exec.make_news_proposal(db, user, text, draft_id, names)
+    reply = note + answer
+    await _store_msg(db, user.id, "assistant", reply)
+    if p is None:
+        return {"status": "info", "message": reply}
+    return {"status": "proposal", "message": reply,
+            "proposal": chat_exec.proposal_public(p)}
+
+
 async def _ai_parse(text: str, query: str) -> list[dict]:
     prov = await create_ai_provider()
     truncated = text[:15000] + ("\n\n[Текст обрезан]" if len(text) > 15000 else "")
@@ -702,6 +759,7 @@ async def chat_reject(
         raise HTTPException(404, detail="Предложение не найдено")
     if p.status == ProposalStatus.PENDING:
         p.status = ProposalStatus.REJECTED
+        chat_exec.cleanup_news_draft(p)  # картин-черновик больше не нужен
         await db.commit()
         await _store_msg(db, current_user.id, "assistant", "Отменено.", ctx_type="action")
     return {"ok": True}

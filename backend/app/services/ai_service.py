@@ -641,7 +641,7 @@ async def build_system_context(user_id: str) -> str:
     dated = [s for s in schedules if s.event_date is not None]
     first_mon = monday_of(today)
 
-    ctx = "Ты — ИИ-помощник преподавателя. Отвечай на русском языке.\n\n"
+    ctx = "Ты — AI TEACHER (СФ МЭИ), ассистент преподавателя. Отвечай на русском языке.\n\n"
     ctx += f"## Сегодня: {today.isoformat()} ({days[today.weekday()]})\n\n"
 
     # ── Календарь по датам на 14 дней ──

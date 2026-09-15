@@ -5,7 +5,7 @@ import os
 
 class Settings(BaseSettings):
     # Приложение
-    APP_NAME: str = "ИИ-помощник преподавателя"
+    APP_NAME: str = "AI TEACHER (СФ МЭИ)"
     APP_VERSION: str = "1.0.0"
     DEBUG: bool = True
 
@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # Загрузка файлов
     MAX_UPLOAD_SIZE_MB: int = 10
     ALLOWED_UPLOAD_EXTENSIONS: list = [".pdf", ".docx", ".doc", ".txt", ".png", ".jpg", ".jpeg", ".xls", ".xlsx"]
+
+    # Медиа для новостей (картинки). Отдаётся как StaticFiles на /media.
+    MEDIA_DIR: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "media")
+    NEWS_MAX_IMAGES: int = 5
+    NEWS_MAX_IMAGE_MB: int = 5
 
     # Статический фронтенд (собранный Vite dist). Если каталог существует —
     # FastAPI отдаёт его как SPA на том же origin, что и /api (для одного контейнера).

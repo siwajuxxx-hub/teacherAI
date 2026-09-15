@@ -112,11 +112,22 @@ export interface ChatMessage {
 
 // ── Новый контракт чата: server-side Proposal ────────────────
 
-export type ProposalKind = 'IMPORT_PLAN' | 'ACTIONS' | 'CLEAR';
+export type ProposalKind = 'IMPORT_PLAN' | 'ACTIONS' | 'CLEAR' | 'NEWS';
 
 export interface ProposalItem {
   text: string;
   kind?: string;
+}
+
+/** Блок новости в карточке NEWS: вариант автора и вариант AI. */
+export interface ProposalNews {
+  title_user: string;
+  text_user: string;
+  title_ai: string;
+  text_ai: string;
+  draft_id: string;
+  image_names: string[];
+  images: string[]; // URL превью (draft-картинки)
 }
 
 /** Карточка предложения (любые записи/удаления — только через неё). */
@@ -126,6 +137,7 @@ export interface Proposal {
   summary: string;
   items: ProposalItem[];   // максимум 30 публичных строк
   total: number;           // всего строк в предложении
+  news?: ProposalNews | null;
 }
 
 export interface QuestionReply { label: string; value: string }
@@ -178,4 +190,17 @@ export interface ConfirmResult {
   ok: boolean;
   report: string;
   proposal_id?: string;
+}
+
+// ── Новости ──────────────────────────────────────────────────
+
+export interface NewsItem {
+  id: string;
+  title: string;
+  body: string;
+  pinned: boolean;
+  author_name: string;
+  created_at: string;
+  updated_at: string;
+  images: string[]; // url'ы вида /media/news/<id>/<file>
 }

@@ -57,8 +57,8 @@ const Header: React.FC = () => {
       {/* Left – app name */}
       <div className="flex items-center gap-2 sm:gap-3 min-w-0">
         <h1 className="text-base sm:text-xl font-bold text-gray-800 truncate">
-          <span className="sm:hidden">ИИ Ассистент</span>
-          <span className="hidden sm:inline">ИИ Ассистент Преподавателя</span>
+          <span className="sm:hidden">AI TEACHER</span>
+          <span className="hidden sm:inline">AI TEACHER (СФ МЭИ)</span>
         </h1>
       </div>
 

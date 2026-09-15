@@ -159,6 +159,7 @@ class ProposalKind(str, enum.Enum):
     IMPORT_PLAN = "import_plan"  # «занести вот эти пары» (массовый импорт)
     ACTIONS = "actions"          # набор точечных действий AI/намерений
     CLEAR = "clear"              # очистка календаря (диапазон/день/всё)
+    NEWS = "news"                # публикация новости (вариант автора или вариант AI)
 
 
 class ProposalStatus(str, enum.Enum):
@@ -186,3 +187,29 @@ class Proposal(Base):
     )
     payload_json: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class NewsItem(Base):
+    """Новость ленты: публикует только manager/admin, читают все.
+
+    Картинки — файлы в data/news/<id>/<uuid>.ext; здесь только их имена в
+    images_json (порядок = порядок показа, первая — превью)."""
+    __tablename__ = "news"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    body: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    pinned: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    author_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    author_name: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    images_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class NewsRead(Base):
+    """Отметка прочтения ленты для «новых» бейджей."""
+    __tablename__ = "news_reads"
+
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    last_read_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

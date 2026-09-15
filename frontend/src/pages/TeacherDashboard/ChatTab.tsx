@@ -2,14 +2,14 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   Send, Paperclip, Loader2, Bot, User as UserIcon,
   CheckCircle, XCircle, FileText, Info, Sparkles, Trash2,
-  Zap, X,
+  Zap, X, Megaphone,
 } from 'lucide-react';
 import * as api from '../../api/client';
 import type { ChatMessage, Proposal, QuestionEnvelope, ImportInfo } from '../../types';
 import { useChatStore } from '../../store/chat';
 import { useAuthStore } from '../../store/auth';
 
-const ACCEPTED_FILE_TYPES = '.pdf,.docx,.doc,.txt,.csv,.tsv,.xls,.xlsx';
+const ACCEPTED_FILE_TYPES = '.pdf,.docx,.doc,.txt,.csv,.tsv,.xls,.xlsx,.png,.jpg,.jpeg,.webp,.gif';
 
 let _seq = 0;
 const nid = (p: string) => `${p}-${Date.now()}-${++_seq}`;
@@ -32,6 +32,8 @@ const MANAGER_COMMANDS: Array<[string, string]> = [
   ['поставь Ивановой И.И. пару завтра в 14:00, предмет ОС, группа ВМ-22з', 'в чужой календарь'],
   ['очисти календарь Петрова П.П. полностью', 'чужой календарь'],
   ['какие у Сидоровой пары на следующей неделе?', 'по вкладке «Календарь»'],
+  ['опубликуй новость — <текст>', 'во вкладку «Новости»; приложите картинку 📎'],
+  ['опубликуй новость — Встреча в 15:00', 'AI предложит свою редакцию — выберете вариант'],
 ];
 
 // ─── Карточка предложения (любые записи — только через неё) ──────
@@ -114,6 +116,82 @@ const ProposalCard: React.FC<{
           className={`flex items-center gap-1.5 px-4 py-2 text-white rounded-xl text-sm font-medium transition ${meta.btn}`}>
           {busy ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle size={16} />}
           {meta.applyLabel}{allShown && checked.size < proposal.items.length ? ` (${checked.size})` : ''}
+        </button>
+        <button onClick={reject} disabled={busy}
+          className="flex items-center gap-1.5 px-4 py-2 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 rounded-xl text-sm transition">
+          <XCircle size={16} /> Отмена
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ─── Карточка публикации новости: ваш вариант или вариант AI ──────
+const NewsCard: React.FC<{
+  proposal: Proposal;
+  onDone: (report: string, applied: boolean) => void;
+}> = ({ proposal, onDone }) => {
+  const news = proposal.news!;
+  const hasAi = !!news.text_ai.trim();
+  const [variant, setVariant] = useState(hasAi ? 1 : 0);
+  const [busy, setBusy] = useState(false);
+
+  const apply = async () => {
+    setBusy(true);
+    try {
+      const res = await api.confirmProposal(proposal.id, [variant]);
+      onDone(res.report, !!res.ok);
+    } catch (err: unknown) {
+      onDone(`❌ Не удалось опубликовать: ${err instanceof Error ? err.message : 'ошибка'}`, false);
+    } finally { setBusy(false); }
+  };
+
+  const reject = async () => {
+    setBusy(true);
+    try { await api.rejectProposal(proposal.id); onDone('', false); }
+    catch { /* карточка станет неактуальной при перезагрузке */ }
+    finally { setBusy(false); }
+  };
+
+  const Option: React.FC<{ idx: number; tag: string; title: string; text: string }> =
+    ({ idx, tag, title, text }) => (
+      <label className={`block rounded-xl border px-3 py-2 cursor-pointer transition ${
+        variant === idx ? 'border-emerald-500 bg-white ring-1 ring-emerald-400' : 'border-gray-200 bg-white/60 hover:bg-white'}`}>
+        <span className="flex items-center gap-2 text-xs font-semibold text-gray-500 mb-0.5">
+          <input type="radio" name={`newsvar-${proposal.id}`} checked={variant === idx}
+            onChange={() => setVariant(idx)} className="accent-emerald-600" />
+          {tag}
+        </span>
+        {title && <span className="block text-sm font-semibold text-gray-800">{title}</span>}
+        <span className="block text-sm text-gray-700 whitespace-pre-wrap">{text || '— без текста, только картинки —'}</span>
+      </label>
+    );
+
+  return (
+    <div className="border rounded-2xl p-4 bg-emerald-50 border-emerald-200">
+      <div className="flex items-center gap-2 mb-1">
+        <Megaphone size={18} className="text-emerald-600" />
+        <span className="font-semibold text-gray-800">Публикация новости</span>
+        <span className="text-xs text-gray-500">вкладка «Новости»</span>
+      </div>
+      {news.images.length > 0 && (
+        <div className="flex flex-wrap gap-2 my-2">
+          {news.images.map((u) => (
+            <img key={u} src={u} alt="" className="h-20 w-20 object-cover rounded-lg border border-emerald-200" />
+          ))}
+        </div>
+      )}
+      <div className="space-y-1.5 mt-1">
+        <Option idx={0} tag="Мой текст (как написал автор)" title="" text={news.text_user} />
+        {hasAi && (
+          <Option idx={1} tag="Отредактировано AI ✨" title={news.title_ai} text={news.text_ai} />
+        )}
+      </div>
+      <div className="flex flex-wrap gap-2 mt-3">
+        <button onClick={apply} disabled={busy}
+          className="flex items-center gap-1.5 px-4 py-2 text-white rounded-xl text-sm font-medium transition bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-300">
+          {busy ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle size={16} />}
+          Опубликовать {variant === 1 ? 'вариант AI' : 'мой вариант'}
         </button>
         <button onClick={reject} disabled={busy}
           className="flex items-center gap-1.5 px-4 py-2 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 rounded-xl text-sm transition">
@@ -465,7 +543,7 @@ const ChatTab: React.FC = () => {
                 {msg.role === 'assistant' && !msg.content.startsWith('❌') && !msg.content.startsWith('✅') && (
                   <div className="flex items-center gap-1.5 mb-1">
                     <Bot size={14} className="text-indigo-500" />
-                    <span className="text-xs font-semibold text-indigo-500">AI ассистент</span>
+                    <span className="text-xs font-semibold text-indigo-500">AI TEACHER</span>
                   </div>
                 )}
                 {msg.content}
@@ -491,7 +569,9 @@ const ChatTab: React.FC = () => {
         {question && !proposal && (
           <QuestionCard question={question} disabled={isStreaming} onReply={sendText} />
         )}
-        {proposal && <ProposalCard proposal={proposal} onDone={onProposalDone} />}
+        {proposal && (proposal.kind === 'NEWS' && proposal.news
+          ? <NewsCard proposal={proposal} onDone={onProposalDone} />
+          : <ProposalCard proposal={proposal} onDone={onProposalDone} />)}
         {proposal && question && (
           <QuestionCard question={question} disabled={isStreaming} onReply={sendText} />
         )}

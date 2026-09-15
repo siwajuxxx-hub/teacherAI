@@ -70,7 +70,7 @@ const LoginPage: React.FC = () => {
               <GraduationCap className="w-8 h-8 text-white" />
             </div>
             <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
-              ИИ-помощник преподавателя
+              AI TEACHER (СФ МЭИ)
             </h1>
             <p className="mt-2 text-sm text-gray-500">
               Войдите в систему, чтобы продолжить работу
@@ -173,7 +173,7 @@ const LoginPage: React.FC = () => {
 
         {/* Футер */}
         <p className="mt-6 text-center text-xs text-white/60">
-          © {new Date().getFullYear()} ИИ-помощник преподавателя
+          © {new Date().getFullYear()} AI TEACHER (СФ МЭИ)
         </p>
       </div>
     </div>

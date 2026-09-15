@@ -9,6 +9,7 @@ import LoginPage from './pages/LoginPage';
 const ChatTab = lazy(() => import('./pages/TeacherDashboard/ChatTab'));
 const CalendarTab = lazy(() => import('./pages/TeacherDashboard/CalendarTab'));
 const NotesTab = lazy(() => import('./pages/TeacherDashboard/NotesTab'));
+const NewsTab = lazy(() => import('./pages/TeacherDashboard/NewsTab'));
 const TeachersView = lazy(() => import('./pages/ManagerDashboard/TeachersView'));
 const ManagerOverview = lazy(() => import('./pages/ManagerDashboard/ManagerOverview'));
 const ManagerCalendar = lazy(() => import('./pages/ManagerDashboard/ManagerCalendar'));
@@ -77,6 +78,7 @@ export default function App() {
           <Route path="chat" element={<ChatTab />} />
           <Route path="calendar" element={<CalendarTab />} />
           <Route path="notes" element={<NotesTab />} />
+          <Route path="news" element={<NewsTab />} />
         </Route>
 
         <Route path="/manager" element={
@@ -87,6 +89,7 @@ export default function App() {
           <Route path="overview" element={<ManagerOverview />} />
           <Route path="calendar" element={<ManagerCalendar />} />
           <Route path="chat" element={<ChatTab />} />
+          <Route path="news" element={<NewsTab />} />
         </Route>
 
         <Route path="/admin" element={
@@ -96,6 +99,7 @@ export default function App() {
           <Route path="users" element={<UsersManagement />} />
           <Route path="settings" element={<SettingsPage />} />
           <Route path="overview" element={<GlobalView />} />
+          <Route path="news" element={<NewsTab />} />
         </Route>
 
         <Route path="/" element={

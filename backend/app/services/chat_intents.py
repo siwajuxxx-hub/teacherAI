@@ -216,6 +216,31 @@ def parse_clear_scope(text: str, today: date | None = None) -> dict:
     return {}  # без уточнения — «полностью» (в карточке будет видно)
 
 
+# ── Публикация новости (менеджер/админ) ───────────────────────────
+
+_NEWS_PUBLISH_RE = re.compile(
+    r"\b(?:опублику[йи](?:те)?|опубликую|вылож[иу](?:те)?|выложить|"
+    r"разме[щш][ауие](?:те)?|размест[ии](?:те)?|разместить|"
+    r"добав[ьи](?:те)?|добавить|анонсиру[йи](?:те)?|анонсирую)\s+"
+    r"(?:(?:новую|следующую|свежую|важную)\s+)?новост(?:ь|и|ку|ей)\b",
+    re.IGNORECASE)
+
+
+def extract_news_text(message: str) -> str:
+    """«опубликуй новость - "текст"» → 'текст'. Пусто, если текста нет."""
+    m = _NEWS_PUBLISH_RE.search(message or "")
+    if not m:
+        return ""
+    rest = message[m.end():]
+    rest = re.sub(r"^\s*(?:—|–|-{1,2}|:|—\s*:)?\s*", "", rest)
+    rest = rest.strip()
+    for op, cl in (("«", "»"), ("\u201c", "\u201d"), ("\u201e", "\u201c"), ('"', '"'), ("'", "'")):
+        if rest.startswith(op) and rest.endswith(cl) and len(rest) > 2:
+            rest = rest[1:-1]
+            break
+    return rest.strip()
+
+
 # ── Главный детектор ──────────────────────────────────────────────
 
 def detect_intent(message: str, *, import_state: str = "", today: date | None = None) -> Intent | None:
@@ -235,6 +260,10 @@ def detect_intent(message: str, *, import_state: str = "", today: date | None = 
     if _CLEAR_RE.search(low) and re.search(r"(календар|расписани|пар|заняти|задач|нот)", low):
         target = extract_target_teacher(m)
         return Intent("clear", fio=target, scope=parse_clear_scope(m, today))
+
+    # Явная команда публикации новости — важнее машины состояний импорта.
+    if _NEWS_PUBLISH_RE.search(m):
+        return Intent("publish_news", scope={"text": extract_news_text(m)})
 
     # Продолжение машины состояний активного импорта.
     # READY тоже принимает переразвёртку: пользователь мог передумать.

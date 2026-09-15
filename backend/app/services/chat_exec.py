@@ -55,13 +55,16 @@ def _is_manager(user: User) -> bool:
 def proposal_public(p: Proposal) -> dict:
     """JSON-карточка для клиента."""
     payload = json.loads(p.payload_json or "{}")
-    return {
+    out = {
         "id": p.id,
         "kind": p.kind.name if hasattr(p.kind, "name") else str(p.kind),
         "summary": payload.get("summary", ""),
         "items": payload.get("rows_public", [])[:MAX_CARD_ITEMS],
         "total": payload.get("total", len(payload.get("rows_public", []))),
     }
+    if payload.get("news"):
+        out["news"] = payload["news"]
+    return out
 
 
 async def _expire_stale_pending(db: AsyncSession, user_id: str) -> None:
@@ -457,6 +460,116 @@ async def make_clear_proposal(db: AsyncSession, user: User, text: str,
     return p, f"Подтвердите: будет удалено {len(sched_rows)} пар и {len(task_rows)} задач ({scope_txt})."
 
 
+# ─── Публикация новостей из чата ──────────────────────────────────
+
+NEWS_REFUSAL = ("Публиковать новости может только административная учётная запись. "
+                "Читать их можно во вкладке «Новости».")
+NEWS_AI_FAIL = ("AI не смог подготовить скорректированный вариант — новость НЕ опубликована. "
+                "Проверьте настройки AI и повторите, либо опубликуйте новость "
+                "во вкладке «Новости».")
+NEWS_AI_TIMEOUT = 60.0
+
+
+def _extract_json_obj(s: str) -> dict | None:
+    s = (s or "").strip()
+    i, j = s.find("{"), s.rfind("}")
+    if i < 0 or j <= i:
+        return None
+    try:
+        d = json.loads(s[i:j + 1])
+    except json.JSONDecodeError:
+        return None
+    return d if isinstance(d, dict) and (d.get("text") or d.get("title")) else None
+
+
+async def _ai_rewrite_news(text: str) -> dict | None:
+    """Вариант AI: {'title':..., 'text':...} или None при любом сбое."""
+    import asyncio
+    from app.services.ai_service import create_ai_provider
+    system = (
+        "Ты — редактор новостей учебного отдела инженерного факультета. "
+        "Отредактируй текст объявления для ленты новостей: исправь ошибки и "
+        "опечатки, сделай формулировки яснее и вежливее, СОХРАНИ все факты, "
+        "даты, имена и смысл. Не добавляй того, чего не было. Верни ТОЛЬКО JSON: "
+        '{"title": "короткий заголовок до 60 знаков", "text": "отредактированный текст"}'
+    )
+    try:
+        prov = await create_ai_provider()
+        chunks: list[str] = []
+
+        async def _collect() -> None:
+            async for ch in prov.chat_stream(
+                    [{"role": "system", "content": system},
+                     {"role": "user", "content": text}], temperature=0.4):
+                chunks.append(ch)
+
+        await asyncio.wait_for(_collect(), timeout=NEWS_AI_TIMEOUT)
+        return _extract_json_obj("".join(chunks))
+    except Exception as e:  # нет ключа, таймаут, мусор в ответе
+        logger.warning("AI rewrite news failed: %s", e)
+        return None
+
+
+async def make_news_proposal(db: AsyncSession, user: User, text: str,
+                             draft_id: str = "", image_names: list[str] | None = None
+                             ) -> tuple[Proposal | None, str]:
+    """Карточка «опубликовать новость»: вариант автора и/или вариант AI."""
+    from app.services import news_store
+    if not _is_manager(user):
+        return None, NEWS_REFUSAL
+    image_names = [n for n in (image_names or []) if news_store.safe_name(n)]
+    text = (text or "").strip()[:20000]
+    if not text and not image_names:
+        return None, ("Что публикуем? Напишите текст после «опубликуй новость —» "
+                      "(и можете прикрепить картинку 📎).")
+
+    # сносим черновики картинок прежних неподтверждённых карточек этого юзера
+    old = (await db.execute(
+        select(Proposal).where(Proposal.user_id == user.id,
+                               Proposal.kind == ProposalKind.NEWS,
+                               Proposal.status == ProposalStatus.PENDING)
+    )).scalars().all()
+    for op in old:
+        try:
+            d = json.loads(op.payload_json or "{}").get("news", {}).get("draft_id", "")
+        except json.JSONDecodeError:
+            d = ""
+        if d:
+            news_store.delete_draft(d)
+
+    ai: dict | None = None
+    if text:
+        ai = await _ai_rewrite_news(text)
+        if ai is None:
+            if draft_id:
+                news_store.delete_draft(draft_id)
+            return None, NEWS_AI_FAIL
+
+    news = {
+        "title_user": "",
+        "text_user": text,
+        "title_ai": str((ai or {}).get("title", ""))[:200],
+        "text_ai": str((ai or {}).get("text", ""))[:20000],
+        "draft_id": draft_id,
+        "image_names": image_names,
+        "images": [news_store.draft_url(draft_id, n) for n in image_names] if draft_id else [],
+    }
+    summary = (f"Новость: «{text[:60] or 'только картинки'}»"
+               + (f" · {len(image_names)} фото" if image_names else "")
+               + " — выберите вариант публикации.")
+    await _expire_stale_pending(db, user.id)
+    p = Proposal(user_id=user.id, kind=ProposalKind.NEWS,
+                 payload_json=json.dumps({"summary": summary, "news": news},
+                                         ensure_ascii=False))
+    db.add(p)
+    await db.commit()
+    answer = ("Подготовил новость. AI предложил свою редакцию — "
+              "на карточке выберите: опубликовать ваш текст или вариант AI.")
+    if not text:
+        answer = "Подготовил новость с картинками — подтверждайте публикацию."
+    return p, answer
+
+
 # ─── Исполнение ───────────────────────────────────────────────────
 
 async def apply_proposal(db: AsyncSession, user: User, p: Proposal,
@@ -546,7 +659,50 @@ async def apply_proposal(db: AsyncSession, user: User, p: Proposal,
         await db.commit()
         return f"Удалено: пар {nd}, задач {nt}."
 
+    if kind == ProposalKind.NEWS:
+        from app.models.data_models import NewsItem
+        from app.services import news_store
+        if not _is_manager(user):
+            return NEWS_REFUSAL
+        news = payload.get("news") or {}
+        use_ai = bool(selected) and 1 in selected and bool(news.get("text_ai"))
+        if use_ai:
+            body = news.get("text_ai", "")
+            title = news.get("title_ai", "")
+        else:
+            body = news.get("text_user", "")
+            # у авторского текста заголовка нет — берём заголовок, предложенный AI
+            title = news.get("title_ai", "")
+        if not body.strip() and not news.get("image_names"):
+            return "Публиковать нечего: и текст, и картинки пусты."
+        n = NewsItem(title=title[:200], body=body[:20000],
+                     author_id=user.id, author_name=user.full_name)
+        db.add(n)
+        await db.flush()
+        names: list[str] = []
+        if news.get("draft_id") and news.get("image_names"):
+            names = news_store.move_draft_to_news(news["draft_id"], n.id,
+                                                  news["image_names"])
+        n.images_json = json.dumps(names, ensure_ascii=False)
+        await db.commit()
+        return ("✅ Новость опубликована ("
+                + ("вариант AI" if use_ai else "ваш вариант")
+                + (f", фото: {len(names)}" if names else "") + ").")
+
     return "Предложение неизвестного типа."
+
+
+def cleanup_news_draft(p: Proposal) -> None:
+    """При отклонении карточки NEWS черновик картинок больше не нужен."""
+    if p.kind != ProposalKind.NEWS:
+        return
+    try:
+        from app.services import news_store
+        draft = json.loads(p.payload_json or "{}").get("news", {}).get("draft_id", "")
+    except json.JSONDecodeError:
+        draft = ""
+    if draft:
+        news_store.delete_draft(draft)
 
 
 def _can_touch(user: User, owner_id: str) -> bool:

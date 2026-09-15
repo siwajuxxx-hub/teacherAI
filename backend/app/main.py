@@ -51,7 +51,7 @@ app.add_middleware(
 # Подключаем роутеры
 # ВАЖНО: роутер settings импортируем с алиасом, иначе он перекрывает
 # объект конфигурации `settings` из app.config.
-from app.routers import auth, schedule, tasks, chat, stats
+from app.routers import auth, schedule, tasks, chat, stats, news
 from app.routers import settings as settings_router
 app.include_router(auth.router)
 app.include_router(auth.users_router)
@@ -60,6 +60,12 @@ app.include_router(tasks.router)
 app.include_router(chat.router)
 app.include_router(settings_router.router)
 app.include_router(stats.router)
+app.include_router(news.router)
+
+# Картинки новостей (и временные драфты карточек из чата) — /media/news/...
+# Монтируем независимо от того, собран ли SPA.
+os.makedirs(settings.MEDIA_DIR, exist_ok=True)
+app.mount("/media", StaticFiles(directory=settings.MEDIA_DIR), name="media")
 
 
 @app.get("/api/health")
