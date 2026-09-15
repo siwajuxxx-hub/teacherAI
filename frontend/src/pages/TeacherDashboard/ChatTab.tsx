@@ -212,16 +212,16 @@ const ChatTab: React.FC = () => {
   };
 
   return (
-    <div className="max-w-4xl mx-auto h-[calc(100vh-10rem)] flex flex-col">
+    <div className="max-w-4xl mx-auto h-[calc(100dvh-14.5rem)] sm:h-[calc(100dvh-10rem)] flex flex-col">
       {/* Заголовок */}
       <div className="flex items-center gap-2 mb-4">
         <Bot size={22} className="text-indigo-600" />
         <h2 className="text-xl font-bold text-gray-800">AI Чат</h2>
-        <span className="text-xs text-gray-400">| История сохраняется до выхода</span>
+        <span className="hidden sm:inline text-xs text-gray-400">| История сохраняется до выхода</span>
       </div>
 
       {/* Подсказка по возможностям */}
-      <div className="flex items-start gap-2 p-3 mb-3 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-800">
+      <div className="hidden sm:flex items-start gap-2 p-3 mb-3 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-800">
         <Info size={16} className="text-blue-500 mt-0.5 shrink-0" />
         <div>
           {isManager ? (
@@ -245,7 +245,7 @@ const ChatTab: React.FC = () => {
       </div>
 
       {/* Область сообщений */}
-      <div className="flex-1 overflow-y-auto bg-white rounded-2xl border border-gray-200 p-4 mb-3 space-y-3">
+      <div className="flex-1 overflow-y-auto bg-white rounded-2xl border border-gray-200 p-3 sm:p-4 mb-3 space-y-3">
         {messages.length === 0 ? (
           <div className="text-center text-gray-400 mt-20">
             <div className="flex justify-center mb-3"><Bot size={48} className="opacity-30" /></div>
@@ -310,7 +310,7 @@ const ChatTab: React.FC = () => {
                 </div>
               ))}
             </div>
-            <div className="flex gap-2 mt-3">
+            <div className="flex flex-wrap gap-2 mt-3">
               <button onClick={handleConfirmActions} disabled={confirming}
                 className="flex items-center gap-1.5 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-indigo-300 text-white rounded-xl text-sm font-medium transition">
                 {confirming ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle size={16} />}
@@ -338,12 +338,12 @@ const ChatTab: React.FC = () => {
                     {(DAYS_SHORT as readonly string[])[item.day_of_week] ?? '?'}
                   </span>
                   <span className="font-mono text-xs text-gray-500">{item.start_time}-{item.end_time}</span>
-                  <span className="font-medium text-gray-800">{item.title}</span>
+                  <span className="font-medium text-gray-800 truncate min-w-0">{item.title}</span>
                   <span className="text-xs text-gray-400 ml-auto">{(SCHEDULE_TYPES as Record<string,string>)[item.type as string] ?? item.type}</span>
                 </div>
               ))}
             </div>
-            <div className="flex gap-2 mt-3">
+            <div className="flex flex-wrap gap-2 mt-3">
               <button onClick={handleConfirmSchedule} disabled={confirming}
                 className="flex items-center gap-1.5 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-300 text-white rounded-xl text-sm font-medium transition">
                 {confirming ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle size={16} />}

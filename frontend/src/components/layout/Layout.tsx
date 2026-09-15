@@ -47,14 +47,14 @@ const Layout: React.FC = () => {
       <Header />
 
       {!hideTabs && tabs.length > 0 && (
-        <nav className="bg-white border-b border-gray-200 px-6">
-          <div className="flex gap-0">
+        <nav className="bg-white border-b border-gray-200 px-2 sm:px-6">
+          <div className="flex gap-0 overflow-x-auto [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {tabs.map((tab) => (
               <NavLink
                 key={tab.to}
                 to={tab.to}
                 className={({ isActive }) =>
-                  `px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+                  `px-3 sm:px-4 py-2.5 sm:py-3 text-sm font-medium border-b-2 shrink-0 whitespace-nowrap transition-colors ${
                     isActive
                       ? 'border-blue-500 text-blue-600'
                       : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
@@ -69,7 +69,7 @@ const Layout: React.FC = () => {
       )}
 
       {/* Main content rendered by child routes */}
-      <main className="flex-1 p-6">
+      <main className="flex-1 p-3 sm:p-6">
         <Outlet />
       </main>
     </div>

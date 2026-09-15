@@ -193,9 +193,9 @@ export default function CalendarTab() {
   if (loading) return <div className="flex justify-center py-12"><div className="animate-spin h-8 w-8 border-2 border-indigo-600 border-t-transparent rounded-full" /></div>;
 
   return (
-    <div className="max-w-6xl mx-auto flex gap-4 h-[calc(100vh-12rem)]">
+    <div className="max-w-6xl mx-auto flex flex-col lg:flex-row gap-4 lg:h-[calc(100dvh-12rem)]">
       {/* Левая часть — календарь месяц */}
-      <div className="w-80 flex-shrink-0 bg-white rounded-xl border border-gray-200 p-4 overflow-auto">
+      <div className="w-full lg:w-80 lg:flex-shrink-0 bg-white rounded-xl border border-gray-200 p-3 sm:p-4 lg:overflow-auto">
         <div className="flex items-center justify-between mb-3">
           <button onClick={prevMonth} className="p-1 hover:bg-gray-100 rounded"><ChevronLeft size={18} /></button>
           <h3 className="font-semibold text-gray-800">{MONTH_NAMES[month]} {year}</h3>
@@ -245,7 +245,7 @@ export default function CalendarTab() {
       </div>
 
       {/* Правая часть — детали дня */}
-      <div className="flex-1 bg-white rounded-xl border border-gray-200 p-5 overflow-auto">
+      <div className="flex-1 min-h-0 bg-white rounded-xl border border-gray-200 p-4 sm:p-5 overflow-auto">
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-bold text-gray-800">
             {selectedDate.toLocaleDateString('ru', { weekday: 'long', day: 'numeric', month: 'long' })}
@@ -345,7 +345,7 @@ export default function CalendarTab() {
       {/* Модальное окно добавления/редактирования занятия */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setShowAddModal(false)}>
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl p-4 sm:p-6 w-full max-w-md mx-4 max-h-[90dvh] overflow-y-auto shadow-xl" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold">{editingItem ? 'Редактировать занятие' : 'Добавить занятие'}</h3>
               <button onClick={() => setShowAddModal(false)}><X size={20} className="text-gray-400" /></button>
@@ -374,7 +374,7 @@ export default function CalendarTab() {
       {/* Модальное окно добавления задачи */}
       {addTaskMode && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => setAddTaskMode(false)}>
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
+          <div className="bg-white rounded-2xl p-4 sm:p-6 w-full max-w-md mx-4 max-h-[90dvh] overflow-y-auto shadow-xl" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold">Новая задача на {fmtDate(selectedDate)}</h3>
               <button onClick={() => setAddTaskMode(false)}><X size={20} className="text-gray-400" /></button>
