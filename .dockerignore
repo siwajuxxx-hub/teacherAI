@@ -1,0 +1,20 @@
+# Контекст сборки единого образа (Dockerfile в корне проекта)
+.git
+**/__pycache__
+*.py[cod]
+
+# Фронт: зависимости и локальные артефакты не нужны — этап web соберёт сам
+frontend/node_modules
+frontend/dist
+
+# Бэкенд: локальные базы, секреты, вenv, собранный статик
+backend/venv/
+backend/.venv/
+backend/data/
+backend/.env
+backend/*.db
+backend/static/
+
+# Логи и временное
+*.log
+**/node_modules

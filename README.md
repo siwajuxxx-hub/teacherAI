@@ -1,0 +1,205 @@
+# ИИ-помощник преподавателя
+
+Веб-приложение для преподавателей с AI-чатом, календарём расписания и системой задач/заметок.
+
+## Возможности
+
+### Три роли пользователей
+1. **Преподаватель** — личный кабинет с чатом, календарём и заметками
+2. **Управляющий** — просмотр расписания/задач преподавателей, добавление собраний и поручений
+3. **Администратор** — управление пользователями, настройка AI-провайдера, глобальный просмотр
+
+### Чат с AI
+- Стриминг ответов (эффект печати)
+- Поддержка OpenRouter, OpenAI и Google Gemini
+- Смена провайдера и API-ключа через админ-панель
+- AI автоматически видит расписание и задачи преподавателя
+- Загрузка PDF/DOCX/TXT для парсинга расписания
+- Excel-расписания (.xls/.xlsx) разбираются структурным парсером без AI —
+  точно, быстро, бесплатно; есть раздача пар «всем преподавателям» по ФИО
+
+### Календарь
+- Недельный обзор расписания
+- Цветовая маркировка: занятия / собрания / прочее
+- Ручное добавление записей
+- Импорт из PDF/DOCX через AI
+
+### Заметки (задачи)
+- Kanban-доска: К выполнению / В процессе / Готово
+- Приоритеты, сроки выполнения
+- Назначение задач от управляющего
+
+---
+
+## Быстрый старт
+
+### Требования
+- Docker и docker-compose
+
+### Запуск
+
+```bash
+cd teacher-ai-assistant
+docker-compose up --build
+```
+
+После запуска:
+- **Фронтенд**: http://localhost
+- **Бэкенд API**: http://localhost:8000/docs
+- **Админ-панель**: http://localhost/admin (логин: `admin` / пароль: `admin`)
+
+### Учетные записи по умолчанию
+
+| Логин | Пароль | Роль |
+|-------|--------|------|
+| `admin` | `admin` | Администратор |
+| `manager` | `manager` | Управляющий |
+| `teacher` | `teacher` | Преподаватель |
+
+---
+
+## Ручной запуск (для разработки)
+
+### Бэкенд
+
+```bash
+cd backend
+python -m venv venv
+venv\Scripts\activate  # Windows
+# source venv/bin/activate  # Linux/Mac
+
+pip install -r requirements.txt
+python -m app.seed  # Создать начальные данные
+uvicorn app.main:app --reload --port 8000
+```
+
+### Фронтенд
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Фронтенд запустится на http://localhost:5173 и будет проксировать API на http://localhost:8000.
+
+---
+
+## Настройка AI
+
+1. Войдите как администратор (`admin` / `admin`)
+2. Перейдите в **Настройки**
+3. Выберите провайдера:
+   - **OpenRouter** (рекомендуется) — множество бесплатных моделей. Получите ключ на [openrouter.ai](https://openrouter.ai)
+   - **OpenAI** — платные модели GPT-4o, GPT-4 и др.
+   - **Gemini** — бесплатный доступ к Google Gemini Flash
+4. Введите API-ключ и модель
+5. Нажмите «Проверить подключение»
+
+### Бесплатные модели через OpenRouter
+
+| Модель | ID |
+|--------|-----|
+| Gemini 2.0 Flash | `google/gemini-2.0-flash-001` |
+| Gemini 1.5 Flash | `google/gemini-1.5-flash` |
+| Llama 3.3 70B | `meta-llama/llama-3.3-70b-instruct` |
+| Mistral Nemo | `mistralai/mistral-nemo` |
+| Qwen 2.5 72B | `qwen/qwen-2.5-72b-instruct` |
+
+---
+
+## Структура баз данных
+
+### `auth.db` — учетные записи и настройки
+- `users` — пользователи (id, username, password_hash, full_name, position, role, is_active)
+- `app_settings` — настройки приложения (AI провайдер, ключ, модель)
+
+### `data.db` — расписание и задачи
+- `schedules` — расписание (user_id, title, day_of_week, start_time, end_time, group_name, room, type, source)
+- `tasks` — задачи (user_id, title, description, priority, status, due_date, assigned_by)
+- `chat_history` — история чата (user_id, role, content)
+
+---
+
+## API-эндпоинты
+
+Полная документация доступна после запуска: http://localhost:8000/docs
+
+| Группа | Методы |
+|--------|--------|
+| `/api/auth/*` | Логин, refresh-токен, профиль |
+| `/api/users/*` | CRUD пользователей (admin) |
+| `/api/schedule/*` | Расписание (CRUD + batch-импорт) |
+| `/api/tasks/*` | Задачи (CRUD + смена статуса) |
+| `/api/chat/*` | Чат (SSE-стриминг, загрузка файлов, история) |
+| `/api/settings/*` | Настройки AI (admin) |
+
+---
+
+## Развёртывание на хостинге
+
+### Бесплатное демо в одном контейнере (Render / Koyeb)
+
+Единый образ `Dockerfile` (в корне проекта) собирает фронтенд и кладёт его в
+FastAPI — приложение живёт на одном URL, CORS не нужен вовсе:
+
+```bash
+# локальная проверка образа (нужен Docker)
+docker build -t teacher-ai-demo .
+docker run --rm -p 8000:8000 -e DEBUG=false teacher-ai-demo
+# → http://localhost:8000 — и SPA, и /api из одного контейнера
+```
+
+**Render.com (бесплатно):**
+1. Залейте репозиторий на GitHub.
+2. New Web Service → выберите репозиторий, Runtime: **Docker**
+   (или просто добавьте `render.yaml` — Render подхватит blueprint сам).
+3. План **Free**. Секреты `JWT_SECRET` / `ENCRYPTION_KEY` генерируются
+   автоматически (`generateValue` в `render.yaml`).
+4. деплой → `https://<имя>.onrender.com`.
+
+**Koyeb (бесплатно, 1 веб-сервис):** Create Web Service → Deployment:
+**Docker registry** (подключите GitHub, укажите путь к `Dockerfile`),
+Port: `8000`, переменные `DEBUG=false`, секреты — свои.
+
+Особенности бесплатного демо:
+- свежий деплой = пустая БД: при старте автоматически создаются демо-аккаунты
+  `admin/admin`, `manager/manager`, `teacher/teacher` — и сразу можно загрузить
+  `.xls` расписание в чат («распредели всем преподавателям»);
+- **смените пароль admin'а**, если ссылка ушла за пределы узкого круга;
+- диск бесплатных контейнеров эфемерный: после ребилда данные обнуляются —
+  для демо это нормально (расписание загружается за секунды), но не для работы;
+- Render free «засыпает» после ~15 минут простоя, первый заход ~50 секунд.
+
+### Развёртывание на VPS (постоянный вариант)
+
+1. Скопируйте проект на сервер
+2. Настройте переменные окружения в `.env` (особенно `JWT_SECRET` и `ENCRYPTION_KEY`)
+3. Запустите `docker-compose up -d`
+4. Для HTTPS настройте reverse-прокси (nginx/caddy) перед контейнерами
+
+### Важные переменные окружения
+
+```env
+JWT_SECRET=<случайная-строка-не-менее-32-символов>
+ENCRYPTION_KEY=<32-байта-для-AES>
+CORS_ORIGINS=["https://ваш-домен.ru"]
+```
+
+---
+
+## Технологический стек
+
+### Бэкенд
+- Python 3.12 + FastAPI
+- SQLAlchemy 2.0 (async) + SQLite
+- JWT-аутентификация
+- pdfplumber + python-docx для парсинга файлов
+- xlrd + openpyxl — структурный парсер Excel-расписаний (.xls/.xlsx)
+
+### Фронтенд
+- React 18 + TypeScript
+- Tailwind CSS 3
+- Zustand (управление состоянием)
+- Axios (HTTP-клиент)
+- Lucide React (иконки)

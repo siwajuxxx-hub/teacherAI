@@ -1,0 +1,18 @@
+# Blueprint для Render.com — бесплатный web-сервис из Dockerfile в этом же репо.
+# Создать сервис можно и через dashboard (New Web Service → Runtime: Docker) —
+# этот файл нужен для повторимого деплоя из репозитория.
+services:
+  - type: web
+    name: teacher-ai-assistant-demo
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: DEBUG
+        value: "false"
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ENCRYPTION_KEY
+        generateValue: true
