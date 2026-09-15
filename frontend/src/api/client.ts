@@ -355,7 +355,7 @@ export async function rejectProposal(proposal_id: string): Promise<void> {
   await api.post('/chat/reject', { proposal_id })
 }
 
-export async function uploadFile(file: File, message?: string): Promise<UploadEnvelope> {
+export async function uploadFile(file: File, message?: string, signal?: AbortSignal): Promise<UploadEnvelope> {
   const formData = new FormData()
   formData.append('file', file)
   // ВАЖНО: текст запроса нужен бэкенду, чтобы понять режим импорта
@@ -367,6 +367,7 @@ export async function uploadFile(file: File, message?: string): Promise<UploadEn
   const response = await authFetch('/api/chat/upload', {
     method: 'POST',
     body: formData,
+    signal,
   })
 
   if (!response.ok) {
@@ -379,6 +380,12 @@ export async function uploadFile(file: File, message?: string): Promise<UploadEn
   }
 
   return response.json() as Promise<UploadEnvelope>
+}
+
+/** Забыть активный файл расписания (кнопка сброса в чате). */
+export async function resetImport(): Promise<{ ok: boolean; message?: string }> {
+  const { data } = await api.post('/chat/import/reset')
+  return data
 }
 
 export async function getChatHistory(limit = 50): Promise<ChatHistoryEnvelope> {

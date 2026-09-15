@@ -38,6 +38,7 @@ from app.services.ai_service import create_ai_provider, build_system_context
 from app.services.file_parser import extract_text_from_file
 from app.services.xls_schedule_parser import parse_xls_schedule, extract_xls_text
 from app.services.docx_schedule_parser import parse_docx_schedule
+from app.services.generic_schedule_parser import parse_generic_file, _decode as _decode_bytes
 from app.services.chat_actions import extract_actions
 from app.services import chat_exec
 from app.services.chat_intents import (
@@ -273,6 +274,26 @@ async def chat_send(
     # Намерения, требующие импорта, без импорта — не намерения (уходят к AI)
     if intent and imp is None and (intent.kind in ("add_pairs", "transfer", "distribute")
                                    or intent.kind.startswith("import_")):
+        # …НО перенос между ДВУМЯ другими преподавателями — вопрос прав и файла,
+        # отвечаем детерминированно, чтобы AI не «обещал» то, чего не делает.
+        if intent.kind == "transfer" and intent.scope.get("to"):
+            from app.services.teacher_matcher import names_match
+            if not chat_exec._is_manager(current_user) and \
+                    not names_match(intent.scope["to"], current_user.full_name):
+                text = ("Переносить занятия в календарь другого преподавателя может только "
+                        "административная учётная запись. Себе — «добавь пары Фамилии ко мне» "
+                        "(для этого нужен файл с расписанием).")
+            elif chat_exec._is_manager(current_user):
+                text = ("Нужен файл-источник: прикрепите расписание (📎) и отправьте вместе "
+                        "с этим запросом — тогда соберу карточку на перенос.")
+            else:
+                text = ""
+            if text:
+                mid = await _store_msg(db, current_user.id, "assistant", text, ctx_type="action")
+
+                async def refusal():
+                    yield _sse({"chunk": text, "done": True, "message_id": mid})
+                return StreamingResponse(refusal(), media_type="text/event-stream")
         intent = None
 
     async def generate():
@@ -484,35 +505,71 @@ async def chat_upload_file(
         items: list[dict] = []
         how = ""
         if ext in (".xls", ".xlsx"):
-            items = parse_xls_schedule(file_bytes, fname)
+            try:
+                items = parse_xls_schedule(file_bytes, fname)
+            except Exception:
+                items = []  # битый/нестандартный Excel — не роняем загрузку
             how = "структурный парсер Excel"
             if not items:
-                txt = extract_xls_text(file_bytes, fname)
+                items = parse_generic_file(file_bytes, fname)
+                if items:
+                    how = "универсальный парсер таблиц"
+            if not items:
+                try:
+                    txt = extract_xls_text(file_bytes, fname)
+                except Exception:
+                    txt = ""
                 if not txt.strip():
-                    raise HTTPException(400, detail="Файл Excel не похож на расписание (не найдены группы и дни недели)")
+                    raise HTTPException(400, detail=(
+                        "Файл не читается как расписание — повреждён или это не Excel. "
+                        "Подойдёт обычный .xlsx с колонками «день, время, предмет, группа, "
+                        "преподаватель», сетка МЭИ или текстовый список."))
                 items = await _ai_parse(txt, query)
                 how = "AI-разбор текстового дампа Excel"
         elif ext == ".docx":
-            items = parse_docx_schedule(file_bytes, fname)
+            try:
+                items = parse_docx_schedule(file_bytes, fname)
+            except Exception:
+                items = []
             how = "структурный парсер DOCX"
+            if not items:
+                items = parse_generic_file(file_bytes, fname)
+                if items:
+                    how = "универсальный парсер таблиц DOCX"
             if not items:
                 txt = await extract_text_from_file(file_bytes, fname)
                 if not txt.strip():
                     raise HTTPException(400, detail="В docx не найдено распознаваемого расписания")
                 items = await _ai_parse(txt, query)
                 how = "AI-разбор текста DOCX"
+        elif ext in (".csv", ".tsv"):
+            items = parse_generic_file(file_bytes, fname)
+            how = "универсальный парсер CSV"
+            if not items:
+                txt = _decode_bytes(file_bytes)
+                if not txt.strip():
+                    raise HTTPException(400, detail="Файл пуст")
+                items = await _ai_parse(txt, query)
+                how = "AI-разбор CSV"
         else:
             txt = await extract_text_from_file(file_bytes, fname)
             if not txt.strip():
-                raise HTTPException(400, detail="Не удалось извлечь текст из файла")
-            items = await _ai_parse(txt, query)
-            how = "AI-разбор"
+                raise HTTPException(400, detail=(
+                    "Не удалось извлечь текст из файла (картинки пока не принимаются). "
+                    "Пришлите расписание файлом .xlsx/.csv/.txt или скопируйте текстом в чат."))
+            items = parse_generic_file(file_bytes, fname)
+            if items:
+                how = "универсальный парсер текста"
+            else:
+                items = await _ai_parse(txt, query)
+                how = "AI-разбор"
 
         items = _normalize_items(items)
         if not items:
-            raise HTTPException(400, detail="В файле не распознано ни одного занятия. "
-                                            "Форматы-гаранты: таблицы .xls/.xlsx МЭИ и .docx-сессии; "
-                                            "остальное — через AI, ему нужен читаемый текст.")
+            raise HTTPException(400, detail=(
+                "В файле не распознано ни одного занятия. Надёжнее всего — таблица с колонками "
+                "«день недели, время, предмет, группа, преподаватель» (.xlsx/.xls/.csv) "
+                "или обычная сетка расписания; остальное разбирает AI, ему нужен читаемый текст."))
 
         # Отменяем прежний незавершённый импорт: новый файл важнее
         old = await _active_import(db, current_user.id)
@@ -648,6 +705,22 @@ async def chat_reject(
         await db.commit()
         await _store_msg(db, current_user.id, "assistant", "Отменено.", ctx_type="action")
     return {"ok": True}
+
+
+@router.post("/import/reset")
+async def chat_import_reset(
+    db: AsyncSession = Depends(get_data_session),
+    current_user: User = Depends(require_teacher_or_above),
+):
+    """Забыть активный файл (кнопка «сбросить» в чате): импорт → CANCELLED."""
+    imp = await _active_import(db, current_user.id)
+    if imp is not None:
+        imp.state = ImportState.CANCELLED
+        note = f"Файл «{imp.filename}» сброшен — можно загрузить новый."
+        await _store_msg(db, current_user.id, "assistant", note, ctx_type="action")
+        await db.commit()
+        return {"ok": True, "message": note}
+    return {"ok": True, "message": "Активного файла нет."}
 
 
 # ─── /history ─────────────────────────────────────────────────────

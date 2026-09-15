@@ -1,17 +1,38 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Send, Paperclip, Loader2, Bot, User as UserIcon,
-  CheckCircle, XCircle, FileText, Info, Sparkles, Trash2, Ban,
+  CheckCircle, XCircle, FileText, Info, Sparkles, Trash2,
+  Zap, X,
 } from 'lucide-react';
 import * as api from '../../api/client';
 import type { ChatMessage, Proposal, QuestionEnvelope, ImportInfo } from '../../types';
 import { useChatStore } from '../../store/chat';
 import { useAuthStore } from '../../store/auth';
 
-const ACCEPTED_FILE_TYPES = '.pdf,.docx,.doc,.txt,.xls,.xlsx';
+const ACCEPTED_FILE_TYPES = '.pdf,.docx,.doc,.txt,.csv,.tsv,.xls,.xlsx';
 
 let _seq = 0;
 const nid = (p: string) => `${p}-${Date.now()}-${++_seq}`;
+
+// Популярные команды — свои для административной учётки, свои для преподавателя
+const TEACHER_COMMANDS: Array<[string, string]> = [
+  ['какие у меня пары завтра?', 'вопрос к вкладке «Календарь»'],
+  ['когда ближайший выходной?', 'честный ответ по календарю'],
+  ['добавь пары Фамилии ко мне', 'замещение из загруженного файла'],
+  ['поставь задачу на пятницу — сходить в деканат', 'вкладка «Заметки»'],
+  ['удали мою задачу «…»', 'из заметок'],
+  ['очисти календарь полностью', 'с карточкой подтверждения'],
+  ['отмена', 'отменить висящий вопрос/карточку'],
+];
+const MANAGER_COMMANDS: Array<[string, string]> = [
+  ['распредели всем преподавателям', 'из загруженного файла (дубли пропускаются)'],
+  ['перенеси пары Федуловой к Шапуленковой', 'занятия одного — в календарь другого'],
+  ['добавь всем их пары на ближайшую неделю', 'после недельного файла'],
+  ['удали у Фамилии все пары и задачи в среду', 'чужой календарь'],
+  ['поставь Ивановой И.И. пару завтра в 14:00, предмет ОС, группа ВМ-22з', 'в чужой календарь'],
+  ['очисти календарь Петрова П.П. полностью', 'чужой календарь'],
+  ['какие у Сидоровой пары на следующей неделе?', 'по вкладке «Календарь»'],
+];
 
 // ─── Карточка предложения (любые записи — только через неё) ──────
 const ProposalCard: React.FC<{
@@ -127,20 +148,22 @@ const QuestionCard: React.FC<{
   </div>
 );
 
-// ─── Индикатор «файл в памяти» ───────────────────────────────────
-const ImportChip: React.FC<{ info: ImportInfo; onCancel: () => void; busy?: boolean }> =
-  ({ info, onCancel, busy }) => {
+// ─── Чип «сейчас работаем с файлом» + сброс ──────────────────────
+const ImportChip: React.FC<{ info: ImportInfo; onReset: () => void; busy?: boolean }> =
+  ({ info, onReset, busy }) => {
     const stateLabel = info.state === 'ASK_PERIOD' ? 'ждёт ответа о периоде'
       : info.state === 'ASK_END' ? 'ждёт дату окончания семестра'
-      : info.state === 'READY' ? 'развёрнут по датам'
+      : info.state === 'READY' ? 'готов к записи'
       : info.state;
     return (
       <div className="flex items-center gap-2 px-3 py-2 bg-gray-800 text-white rounded-xl text-xs">
         <FileText size={14} className="shrink-0" />
-        <span className="truncate max-w-[12rem] sm:max-w-md">📄 {info.filename} · {stateLabel}</span>
-        <button onClick={onCancel} disabled={busy} title="Отменить импорт"
+        <span className="truncate max-w-[12rem] sm:max-w-md">
+          Работаем с файлом: {info.filename} · {stateLabel}
+        </span>
+        <button onClick={onReset} disabled={busy} title="Забыть этот файл и загрузить новый"
           className="ml-auto flex items-center gap-1 px-2 py-0.5 bg-white/10 hover:bg-white/20 rounded-lg transition">
-          <Ban size={12} /> отменить
+          <X size={12} /> сбросить
         </button>
       </div>
     );
@@ -157,11 +180,17 @@ const ChatTab: React.FC = () => {
   const isManager = user?.role === 'manager' || user?.role === 'admin';
 
   const [input, setInput] = useState('');
+  const [attach, setAttach] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadSec, setUploadSec] = useState(0);
+  const [cmdsOpen, setCmdsOpen] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  const uploadNameRef = useRef<string>('');
+  const tickRef = useRef<number | null>(null);
   const historyLoaded = useRef(false);
 
   // ── Восстановление истории и висящей карточки после F5 ─────
@@ -248,41 +277,85 @@ const ChatTab: React.FC = () => {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(input); }
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); }
   };
 
-  // ── Загрузка файла ──────────────────────────────────────────
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  // ── Выбор файла: только прикрепляем (не отправляем) ───────────
+  const onPickFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    setUploading(true);
-    try {
-      const instruction = input.trim();
+    if (file) setAttach(file);
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // ── Отправка: файл (если прикреплён) + текст — одним запросом ─
+  const submit = async () => {
+    if (isStreaming || uploading) return;
+    const text = input.trim();
+
+    if (attach) {
+      const file = attach;
+      setAttach(null);
+      setInput('');
       appendMessages({
         id: nid('fu'), role: 'user',
-        content: `📎 Загружен файл: ${file.name}` + (instruction ? `\nЗапрос: ${instruction}` : ''),
+        content: `📎 ${file.name}` + (text ? `\n${text}` : ''),
         created_at: new Date().toISOString(),
       });
-      setInput('');
-      const result = await api.uploadFile(file, instruction || undefined);
-      appendMessages({
-        id: nid('fa'), role: 'assistant',
-        content: result.message || 'Файл обработан.',
-        created_at: new Date().toISOString(),
-      });
-      setProposal(result.proposal ?? null);
-      setQuestion(result.question ?? null);
-      setImportInfo(result.import ?? null);
-    } catch (err: unknown) {
-      appendMessages({
-        id: nid('fe'), role: 'assistant',
-        content: `❌ ${err instanceof Error ? err.message : 'Ошибка загрузки файла'}`,
-        created_at: new Date().toISOString(),
-      });
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
+      setUploading(true);
+      setUploadSec(0);
+      uploadNameRef.current = file.name;
+      tickRef.current = window.setInterval(() => setUploadSec((s) => s + 1), 1000);
+      uploadAbortRef.current = new AbortController();
+      try {
+        const result = await api.uploadFile(file, text || undefined, uploadAbortRef.current.signal);
+        appendMessages({
+          id: nid('fa'), role: 'assistant',
+          content: result.message || 'Файл обработан.',
+          created_at: new Date().toISOString(),
+        });
+        setProposal(result.proposal ?? null);
+        setQuestion(result.question ?? null);
+        setImportInfo(result.import ?? null);
+      } catch (err: unknown) {
+        const e = err as Error;
+        if (e?.name === 'AbortError') {
+          appendMessages({
+            id: nid('fz'), role: 'assistant',
+            content: '⏹ Отправка файла прервана. Если сервер всё же разобрал файл — он появится в чипах сверху после обновления чата.',
+            created_at: new Date().toISOString(),
+          });
+          api.getChatHistory(1).then((h) => setImportInfo(h.import ?? null)).catch(() => {});
+        } else {
+          appendMessages({
+            id: nid('fe'), role: 'assistant',
+            content: `❌ ${e?.message || 'Ошибка загрузки файла'}`,
+            created_at: new Date().toISOString(),
+          });
+        }
+      } finally {
+        setUploading(false);
+        if (tickRef.current) window.clearInterval(tickRef.current);
+        uploadAbortRef.current = null;
+      }
+      return;
     }
+    if (text) sendText(text);
+  };
+
+  const cancelUpload = () => uploadAbortRef.current?.abort();
+
+  // ── Сброс активного файла, чтобы загрузить новый ──────────────
+  const resetFile = async () => {
+    try {
+      const r = await api.resetImport();
+      setImportInfo(null);
+      setQuestion(null);
+      appendMessages({
+        id: nid('ir'), role: 'assistant',
+        content: r.message || 'Файл сброшен.',
+        created_at: new Date().toISOString(),
+      });
+    } catch { /* сеть */ }
   };
 
   // ── После применения/отклонения карточки ────────────────────
@@ -308,13 +381,38 @@ const ChatTab: React.FC = () => {
         <Bot size={22} className="text-indigo-600" />
         <h2 className="text-xl font-bold text-gray-800">AI Чат</h2>
         <span className="hidden sm:inline text-xs text-gray-400">| История сохраняется</span>
-        {importInfo && (
-          <div className="ml-auto">
-            <ImportChip info={importInfo} busy={isStreaming || uploading}
-              onCancel={() => sendText('отмена')} />
-          </div>
-        )}
+        <button type="button" onClick={() => setCmdsOpen((v) => !v)}
+          className={`ml-auto flex items-center gap-1 px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+            cmdsOpen ? 'bg-amber-100 border-amber-300 text-amber-800' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+          <Zap size={14} /> Команды
+        </button>
       </div>
+
+      {/* Активный файл чата — всегда на виду, с кнопкой сброса */}
+      {importInfo && (
+        <div className="mb-3 flex justify-center sm:justify-start">
+          <ImportChip info={importInfo} busy={uploading} onReset={resetFile} />
+        </div>
+      )}
+
+      {/* Список популярных команд (свой для административной учётки, свой для преподавателя) */}
+      {cmdsOpen && (
+        <div className="p-3 mb-3 bg-amber-50 border border-amber-200 rounded-xl">
+          <p className="text-xs text-amber-700 mb-2">
+            Нажмите команду — она подставится в поле ввода. Замените «Фамилии/ФИО» на реальные.
+            {isManager ? ' Команды административной учётной записи.' : ' Команды преподавателя.'}
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {(isManager ? MANAGER_COMMANDS : TEACHER_COMMANDS).map(([cmd, hintFor]) => (
+              <button key={cmd} type="button" title={hintFor}
+                onClick={() => setInput(cmd)}
+                className="text-xs bg-white border border-amber-200 hover:border-amber-400 hover:bg-amber-100 text-gray-700 rounded-full px-2.5 py-1 transition-colors">
+                {cmd}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Подсказка */}
       <div className="hidden sm:flex items-start gap-2 p-3 mb-3 bg-blue-50 border border-blue-200 rounded-xl text-sm text-blue-800">
@@ -322,23 +420,24 @@ const ChatTab: React.FC = () => {
         <div>
           {isManager ? (
             <>
-              <strong>Режим управляющего:</strong> перетащите файл расписания в чат — пары разложатся
-              по датам; на вопрос о периоде ответьте кнопкой. Затем:
+              <strong>Режим управляющего:</strong> прикрепите файл (📎), рядом напишите запрос и отправьте
+              одним сообщением — пары разложатся по датам; на вопрос о периоде ответьте кнопкой. Затем:
               <code className="text-xs bg-blue-100 px-1.5 py-0.5 rounded mx-1">распредели всем преподавателям</code>
               — записи получат только те, у кого есть учётка (дубли пропускаются);
               <code className="text-xs bg-blue-100 px-1.5 py-0.5 rounded mx-1">перенеси пары Федуловой к Шапуленковой</code>
               — занятия одного преподавателя из файла — в календарь другого. Можно править календарь
-              любого преподавателя: «удали у ФИО все пары в среду».
+              любого преподавателя: «удали у ФИО все пары в среду». Полный список — кнопка «⚡ Команды».
             </>
           ) : (
             <>
-              <strong>Что умеет чат:</strong> загрузить файл расписания (📎), добавить/удалить пары и задачи,
-              перенести занятие, поставить задачу на день — и всегда спрашивает подтверждение карточкой.
+              <strong>Что умеет чат:</strong> прикрепить файл расписания (📎) и отправить его вместе
+              с запросом, добавлять/удалять пары и задачи, переносить занятия — каждое изменение
+              подтверждается карточкой. Полный список — кнопка «⚡ Команды».
               <br />
               <span className="text-xs text-blue-600">
                 Примеры: «какие у меня пары завтра?», «поставь задачу на пятницу — сходить в деканат»,
-                «добавь пары Федуловой А.С. ко мне», «очисти календарь полностью».
-                После загрузки файл остаётся «в памяти» — недели раскладываются по вопросу о периоде.
+                «добавь пары Федуловой ко мне», «очисти календарь полностью».
+                Файл остаётся «в работе» (чип сверху) — его можно сбросить и загрузить новый.
               </span>
             </>
           )}
@@ -400,22 +499,48 @@ const ChatTab: React.FC = () => {
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Ввод */}
-      <div className="flex items-end gap-2">
-        <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading || isStreaming}
-          className="p-3 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 rounded-xl transition-colors" title="Загрузить файл">
-          {uploading ? <Loader2 size={20} className="animate-spin" /> : <Paperclip size={20} />}
-        </button>
-        <input ref={fileInputRef} type="file" accept={ACCEPTED_FILE_TYPES} onChange={handleFileUpload} className="hidden" />
-        <div className="flex-1">
-          <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown}
-            placeholder="Напишите сообщение… (Enter — отправить, Shift+Enter — новая строка)" disabled={isStreaming} rows={1}
-            className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-shadow text-sm disabled:bg-gray-50 disabled:text-gray-400 resize-none" />
+      {/* Ввод: приложенный файл + текст отправляются одним сообщением */}
+      <div className="space-y-1.5">
+        {(attach || uploading) && (
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-indigo-50 border border-indigo-200 rounded-xl text-xs text-indigo-900 w-fit max-w-full">
+            <Paperclip size={13} className="shrink-0" />
+            <span className="truncate">{attach ? attach.name : uploadNameRef.current || 'файл'}
+              {attach && attach.size ? ` · ${Math.max(1, Math.round(attach.size / 1024))} КБ` : ''}
+            </span>
+            {uploading ? (
+              <>
+                <span className="flex items-center gap-1 text-indigo-600">
+                  <Loader2 size={12} className="animate-spin" /> обрабатываю… {uploadSec} с
+                </span>
+                <button type="button" onClick={cancelUpload} title="Прервать обработку файла"
+                  className="ml-1 p-0.5 rounded hover:bg-indigo-100 text-red-600"><X size={13} /></button>
+              </>
+            ) : (
+              <button type="button" onClick={() => setAttach(null)} title="Убрать файл"
+                className="ml-1 p-0.5 rounded hover:bg-indigo-100"><X size={13} /></button>
+            )}
+          </div>
+        )}
+        <div className="flex items-end gap-2">
+          <button type="button" onClick={() => fileInputRef.current?.click()} disabled={uploading || isStreaming}
+            className="p-3 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 rounded-xl transition-colors"
+            title="Прикрепить файл расписания (отправится вместе с текстом)">
+            <Paperclip size={20} />
+          </button>
+          <input ref={fileInputRef} type="file" accept={ACCEPTED_FILE_TYPES} onChange={onPickFile} className="hidden" />
+          <div className="flex-1">
+            <textarea value={input} onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown}
+              placeholder={attach ? 'Запрос к файлу (можно оставить пустым) — Enter отправит файл+текст…'
+                : 'Напишите сообщение… (Enter — отправить, Shift+Enter — новая строка)'}
+              disabled={isStreaming || uploading} rows={1}
+              className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none transition-shadow text-sm disabled:bg-gray-50 disabled:text-gray-400 resize-none" />
+          </div>
+          <button type="button" onClick={submit}
+            disabled={isStreaming || uploading || (!input.trim() && !attach)}
+            className="p-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 text-white rounded-xl transition-colors shrink-0">
+            {uploading ? <Loader2 size={20} className="animate-spin" /> : <Send size={20} />}
+          </button>
         </div>
-        <button type="button" onClick={() => sendText(input)} disabled={!input.trim() || isStreaming}
-          className="p-3 bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-300 text-white rounded-xl transition-colors shrink-0">
-          <Send size={20} />
-        </button>
       </div>
     </div>
   );

@@ -47,11 +47,17 @@ def _clean_json(text: str) -> dict:
 # Небольшой размер + запас по времени: бесплатные модели медленные.
 CHUNK_SIZE = 6000
 
-# Таймаут одного запроса к AI. Бесплатные модели могут думать несколько минут.
+# Таймаут одного ЗАПИСЫВАЮЩЕГО стрим-запроса к AI (чат может думать долго).
 AI_TIMEOUT = 300.0
 
+# Парсинг расписания живёт по своим жёстким часам: один HTTP-запрос на кусок —
+# не дольше AI_PARSE_REQUEST_TIMEOUT, весь разбор файла — не дольше
+# AI_PARSE_DEADLINE. Что не успело — отбрасывается, чат НЕ висит.
+AI_PARSE_REQUEST_TIMEOUT = 75.0
+AI_PARSE_DEADLINE = 160.0
+
 # Сколько раз повторять запрос по куску при сетевом сбое/таймауте.
-AI_RETRIES = 3
+AI_RETRIES = 2
 
 
 def split_schedule_text(text: str, chunk_size: int = CHUNK_SIZE) -> list[str]:
@@ -160,7 +166,10 @@ async def _parse_chunks_parallel(coro_factory, chunks: list[str], limit: int = 3
     Параллельность критична: 4 куска последовательно не укладываются
     в таймаут HTTP-запроса к нашему API. Один упавший кусок не роняет
     остальные — его результат просто пустой.
-    """
+
+    Весь разбор ограничен общим дедлайном AI_PARSE_DEADLINE: если модель
+    висит, по истечении возвращаем то, что успело разобраться, а НЕ ждём
+    бесконечно (это и лечило «вечную загрузку» чата на новых файлах)."""
     import asyncio as _asyncio
 
     sem = _asyncio.Semaphore(limit)
@@ -173,7 +182,12 @@ async def _parse_chunks_parallel(coro_factory, chunks: list[str], limit: int = 3
             except Exception:
                 results[idx] = []
 
-    await _asyncio.gather(*(run(i, c) for i, c in enumerate(chunks)))
+    gather = _asyncio.gather(*(run(i, c) for i, c in enumerate(chunks)))
+    try:
+        await _asyncio.wait_for(gather, timeout=AI_PARSE_DEADLINE)
+    except _asyncio.TimeoutError:
+        # срок вышел — отдаём частичный результат (already-filled slots)
+        pass
     return results
 
 
@@ -304,6 +318,7 @@ class OpenAICompatibleProvider(AIProvider):
             resp = await self.client.post(
                 f"{self.base_url}/chat/completions",
                 headers=headers,
+                timeout=AI_PARSE_REQUEST_TIMEOUT,
                 json={
                     "model": self.model,
                     "messages": [
@@ -385,6 +400,7 @@ class OpenAICompatibleProvider(AIProvider):
             resp = await self.client.post(
                 f"{self.base_url}/chat/completions",
                 headers=headers,
+                timeout=AI_PARSE_REQUEST_TIMEOUT,
                 json={
                     "model": self.model,
                     "messages": [
@@ -523,7 +539,8 @@ class GeminiProvider(AIProvider):
             "generationConfig": {"temperature": 0.1},
         }
 
-        response = await self.client.post(url, params=params, json=body)
+        response = await self.client.post(url, params=params, json=body,
+                                          timeout=AI_PARSE_REQUEST_TIMEOUT)
         if response.status_code != 200:
             raise Exception(f"Gemini API error ({response.status_code}): {response.text[:500]}")
 
@@ -551,7 +568,8 @@ teacher — ФИО из ячейки без званий (доц., ст.пр., �
             "contents": [{"role": "user", "parts": [{"text": f"Расписание:\n\n{text}"}]}],
             "generationConfig": {"temperature": 0.1},
         }
-        response = await self.client.post(url, params=params, json=body)
+        response = await self.client.post(url, params=params, json=body,
+                                          timeout=AI_PARSE_REQUEST_TIMEOUT)
         if response.status_code != 200:
             raise Exception(f"Gemini API error ({response.status_code}): {response.text[:500]}")
 
