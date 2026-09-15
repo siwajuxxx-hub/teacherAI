@@ -67,3 +67,20 @@ class AISettingsOut(BaseModel):
     model: str
     base_url: Optional[str] = None
     has_api_key: bool = False  # Не отдаём ключ, только флаг наличия
+
+
+# --- Keepalive (имитация активности против сна free-хостинга) ---
+
+class KeepaliveUpdate(BaseModel):
+    enabled: bool
+
+
+class KeepaliveOut(BaseModel):
+    enabled: bool
+    target: str
+    interval_sec: int
+    pings_ok: int
+    pings_failed: int
+    last_ok_at: Optional[str] = None
+    last_error: Optional[str] = None
+    external_url_mode: bool = False

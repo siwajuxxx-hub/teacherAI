@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
   Save, Wifi, Eye, EyeOff, Loader2, AlertCircle, CheckCircle,
-  Info, ExternalLink, Zap, Globe, Settings2,
+  Info, ExternalLink, Zap, Globe, Settings2, Activity,
 } from 'lucide-react';
 import * as api from '../../api/client';
 import type { AISettings, AISettingsUpdatePayload } from '../../types';
@@ -69,6 +69,26 @@ const SettingsPage: React.FC = () => {
 
   const [showKey, setShowKey] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // ── Keepalive (пробуждение сервера) ────────────────────────
+  const [ka, setKa] = useState<api.KeepaliveStatus | null>(null);
+  const [kaBusy, setKaBusy] = useState(false);
+
+  useEffect(() => {
+    api.getKeepalive().then(setKa).catch(() => {});
+  }, []);
+
+  const toggleKeepalive = async () => {
+    if (!ka || kaBusy) return;
+    setKaBusy(true);
+    try {
+      setKa(await api.setKeepalive(!ka.enabled));
+    } catch {
+      /* оставили прежнее состояние */
+    } finally {
+      setKaBusy(false);
+    }
+  };
 
   // ── Загрузка текущих настроек ─────────────────────────────
   useEffect(() => {
@@ -267,7 +287,7 @@ const SettingsPage: React.FC = () => {
               </div>
 
               {/* Кнопки */}
-              <div className="flex gap-3 pt-1">
+              <div className="flex flex-wrap gap-3 pt-1">
                 <button
                   type="submit"
                   disabled={saving}
@@ -399,6 +419,84 @@ const SettingsPage: React.FC = () => {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* ── Keepalive: против сна free-инстанса Render ───────────────── */}
+      <div className="mt-6 bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-lg bg-emerald-100 flex items-center justify-center shrink-0">
+              <Activity size={18} className="text-emerald-600" />
+            </div>
+            <div>
+              <h2 className="font-semibold text-gray-800">Пробуждение сервера (keepalive)</h2>
+              <p className="text-xs text-gray-500 mt-0.5 max-w-xl">
+                Раз в {ka ? Math.round(ka.interval_sec / 60) : '…'} мин. приложение само обращается к своему
+                публичному URL — этого достаточно, чтобы Render не усыплял бесплатный инстанс
+                после 15 минут простоя. Выключайте, если приложение крутится на сервере 24/7
+                (локально, VPS).
+              </p>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={toggleKeepalive}
+            disabled={!ka || kaBusy}
+            className={`relative w-12 h-7 rounded-full transition-colors shrink-0 mt-1 ${
+              ka?.enabled ? 'bg-emerald-500' : 'bg-gray-300'
+            } disabled:opacity-50`}
+            title={ka?.enabled ? 'Нажмите, чтобы выключить' : 'Нажмите, чтобы включить'}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 w-6 h-6 bg-white rounded-full shadow transition-transform ${
+                ka?.enabled ? 'translate-x-5' : ''
+              }`}
+            />
+          </button>
+        </div>
+
+        {ka && (
+          <div className="mt-4 pt-4 border-t border-gray-100 grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-1.5 text-xs text-gray-500">
+            <div>
+              <span className="font-medium text-gray-600">Цель:</span>{' '}
+              <code className="bg-gray-100 px-1.5 py-0.5 rounded break-all">{ka.target}</code>
+            </div>
+            <div>
+              {ka.external_url_mode ? (
+                <span className="text-emerald-600 font-medium">
+                  ✓ режим Render — пинг идёт через внешний URL и засчитывается как активность
+                </span>
+              ) : (
+                <span className="text-gray-400">
+                  локальный режим (нет RENDER_EXTERNAL_URL) — пинг в localhost, безопасная имитация
+                </span>
+              )}
+            </div>
+            <div>
+              <span className="font-medium text-gray-600">Статус:</span>{' '}
+              {ka.last_ok_at ? (
+                <span className="text-emerald-600">
+                  OK · успешных {ka.pings_ok} · последний{' '}
+                  {new Date(ka.last_ok_at).toLocaleTimeString('ru-RU')}
+                </span>
+              ) : ka.last_error ? (
+                <span className="text-red-500">ошибка: {ka.last_error}</span>
+              ) : (
+                <span>ожидаем первый пинг (до {ka.interval_sec} сек.)</span>
+              )}
+            </div>
+            <div>
+              <span className="font-medium text-gray-600">Функция:</span>{' '}
+              {ka.enabled ? (
+                <span className="text-emerald-600 font-semibold">включена</span>
+              ) : (
+                <span className="text-gray-400">выключена</span>
+              )}
+              {ka.pings_failed > 0 && <span className="text-red-400"> · сбоев: {ka.pings_failed}</span>}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -24,8 +24,13 @@ async def lifespan(app: FastAPI):
         from app.seed import seed
         await seed()
 
+    # Фоновый keepalive против сна free-инстанса Render (управляется из админки)
+    from app.services.keepalive import keepalive
+    keepalive.start()
+
     yield
     # Shutdown
+    await keepalive.stop()
 
 
 app = FastAPI(

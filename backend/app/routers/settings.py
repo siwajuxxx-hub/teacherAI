@@ -5,7 +5,7 @@ from sqlalchemy import select
 
 from app.database import get_auth_session
 from app.models.auth_models import AppSetting, User
-from app.schemas.auth_schemas import AISettingsUpdate, AISettingsOut
+from app.schemas.auth_schemas import AISettingsUpdate, AISettingsOut, KeepaliveUpdate, KeepaliveOut
 from app.security import require_admin, encrypt_api_key, decrypt_api_key
 
 router = APIRouter(prefix="/api/settings", tags=["Настройки"])
@@ -104,3 +104,46 @@ async def test_ai_connection(
             "status": "error",
             "error": f"{type(e).__name__}: {e}",
         }
+
+
+# ─── Keepalive: имитация активности против сна free-инстанса Render ────────
+
+async def _read_keepalive_enabled(db: AsyncSession) -> bool:
+    row = (
+        await db.execute(select(AppSetting).where(AppSetting.key == "keepalive_enabled"))
+    ).scalar_one_or_none()
+    # Ключа нет (свежая база) — по умолчанию включено.
+    return True if row is None else row.value.strip().lower() == "true"
+
+
+@router.get("/keepalive", response_model=KeepaliveOut)
+async def get_keepalive(
+    db: AsyncSession = Depends(get_auth_session),
+    _: User = Depends(require_admin),
+):
+    from app.services.keepalive import keepalive
+
+    return KeepaliveOut(
+        enabled=await _read_keepalive_enabled(db), **keepalive.status()
+    )
+
+
+@router.put("/keepalive", response_model=KeepaliveOut)
+async def set_keepalive(
+    body: KeepaliveUpdate,
+    db: AsyncSession = Depends(get_auth_session),
+    _: User = Depends(require_admin),
+):
+    from app.services.keepalive import keepalive
+
+    value = "true" if body.enabled else "false"
+    row = (
+        await db.execute(select(AppSetting).where(AppSetting.key == "keepalive_enabled"))
+    ).scalar_one_or_none()
+    if row is None:
+        db.add(AppSetting(key="keepalive_enabled", value=value))
+    else:
+        row.value = value
+    await db.commit()
+
+    return KeepaliveOut(enabled=body.enabled, **keepalive.status())

@@ -363,4 +363,27 @@ export async function testAIConnection() {
   return data as { status: string; response?: string; error?: string }
 }
 
+// ── Keepalive API (admin) ─────────────────────────────
+
+export interface KeepaliveStatus {
+  enabled: boolean
+  target: string
+  interval_sec: number
+  pings_ok: number
+  pings_failed: number
+  last_ok_at: string | null
+  last_error: string | null
+  external_url_mode: boolean
+}
+
+export async function getKeepalive() {
+  const { data } = await api.get('/settings/keepalive')
+  return data as KeepaliveStatus
+}
+
+export async function setKeepalive(enabled: boolean) {
+  const { data } = await api.put('/settings/keepalive', { enabled })
+  return data as KeepaliveStatus
+}
+
 export default api
